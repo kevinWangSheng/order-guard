@@ -98,7 +98,7 @@
       "id": "T07",
       "name": "规则管理",
       "layer": "核心引擎",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T02", "T03"],
       "spec": "specs/t07-rules/",
       "steps": [

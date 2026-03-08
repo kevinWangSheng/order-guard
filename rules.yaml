@@ -1,0 +1,36 @@
+# OrderGuard 内置规则定义
+# Built-in rules for OrderGuard
+
+rules:
+  - id: "rule-inventory-risk"
+    name: "库存风险检查"
+    description: "检查 SKU 是否存在缺货或积压风险"
+    connector: "mock"
+    data_type: "inventory"
+    prompt: |
+      你是一个库存分析专家。请根据以下库存数据判断每个 SKU 的补货风险：
+
+      判断规则：
+      - 如果可售天数 < 补货周期，标记为 critical（紧急缺货风险）
+      - 如果可售天数 < 补货周期 * 1.5，标记为 warning（需关注）
+      - 如果可售天数 > 补货周期 * 5，标记为 warning（积压风险）
+      - 其他情况标记为 info（正常）
+
+      请结合商品特性给出补货建议。
+    enabled: true
+
+  - id: "rule-return-rate"
+    name: "退货率异常检查"
+    description: "检测退货率异常偏高的 SKU"
+    connector: "mock"
+    data_type: "orders"
+    prompt: |
+      你是一个电商运营分析专家。请分析以下订单数据中退货率异常的 SKU：
+
+      判断规则：
+      - 退货率 > 10% 标记为 critical
+      - 退货率 > 5% 标记为 warning
+      - 退货率 > 3% 标记为 info
+
+      请分析可能的退货原因并给出改善建议。
+    enabled: true
