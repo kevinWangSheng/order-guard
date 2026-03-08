@@ -21,7 +21,7 @@
       "id": "T02",
       "name": "配置管理",
       "layer": "基础层",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T01"],
       "spec": "specs/t02-config/",
       "steps": [

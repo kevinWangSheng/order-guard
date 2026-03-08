@@ -6,12 +6,14 @@ from fastapi import FastAPI
 from loguru import logger
 
 from order_guard import __version__
+from order_guard.config import get_settings
 from order_guard.logging import setup_logging
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_logging()
+    settings = get_settings()
+    setup_logging(log_dir=settings.app.log_dir, level=settings.app.log_level)
     logger.info("OrderGuard v{} starting", __version__)
     yield
     logger.info("OrderGuard shutting down")

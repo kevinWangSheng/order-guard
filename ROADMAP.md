@@ -6,7 +6,7 @@
 
 ### 基础层
 - [x] **T01: 项目骨架** — Python 包结构、依赖、FastAPI/CLI 入口、Docker
-- [ ] **T02: 配置管理** — Pydantic Settings + YAML + 环境变量覆盖
+- [x] **T02: 配置管理** — Pydantic Settings + YAML + 环境变量覆盖
 - [ ] **T03: 存储层** — SQLModel + SQLite + Alembic 迁移
 
 ### 核心引擎
