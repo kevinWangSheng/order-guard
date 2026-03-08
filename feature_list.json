@@ -128,7 +128,7 @@
       "id": "T09",
       "name": "调度层",
       "layer": "集成层",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T02", "T03", "T04", "T05", "T06", "T07", "T08"],
       "spec": "specs/t09-scheduler/",
       "steps": [

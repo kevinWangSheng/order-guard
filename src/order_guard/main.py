@@ -15,7 +15,57 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(log_dir=settings.app.log_dir, level=settings.app.log_level)
     logger.info("OrderGuard v{} starting", __version__)
-    yield
+
+    # Initialize storage
+    from order_guard.storage.database import init_db
+    await init_db()
+
+    # Sync rules from YAML
+    from order_guard.engine.rules import RuleManager
+    rule_manager = RuleManager()
+    await rule_manager.sync_rules_to_db()
+
+    # Set up connectors
+    from order_guard.connectors.registry import ConnectorRegistry
+    connector_registry = ConnectorRegistry()
+    if settings.connectors:
+        connector_registry.register_from_config(
+            [c.model_dump() for c in settings.connectors]
+        )
+
+    # Set up alert dispatcher
+    from order_guard.alerts.dispatcher import AlertDispatcher
+    dispatcher = AlertDispatcher()
+    if settings.alerts.channels:
+        dispatcher.register_from_config(settings.alerts.channels)
+
+    # Set up scheduler
+    from order_guard.engine.analyzer import Analyzer
+    from order_guard.scheduler.setup import create_scheduler
+    analyzer = Analyzer()
+    scheduler = await create_scheduler(
+        connector_registry=connector_registry,
+        rule_manager=rule_manager,
+        analyzer=analyzer,
+        dispatcher=dispatcher,
+    )
+
+    # Store components on app state for access in routes/CLI
+    app.state.rule_manager = rule_manager
+    app.state.connector_registry = connector_registry
+    app.state.dispatcher = dispatcher
+    app.state.analyzer = analyzer
+    app.state.scheduler = scheduler
+
+    # Start scheduler
+    if settings.scheduler.enabled:
+        async with scheduler:
+            logger.info("Scheduler started")
+            yield
+            logger.info("Scheduler stopping")
+    else:
+        yield
+
     logger.info("OrderGuard shutting down")
 
 
