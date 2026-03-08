@@ -28,6 +28,7 @@ async def run_detection_job(
     dispatcher: AlertDispatcher,
     *,
     dry_run: bool = False,
+    mcp_manager: Any | None = None,
 ) -> TaskRun | None:
     """Execute the full detection pipeline for a single rule.
 
@@ -57,32 +58,19 @@ async def run_detection_job(
             await _complete_task_run(task_run, "success", time.monotonic() - start_time, result={"skipped": True})
             return task_run
 
-        # 3. Fetch data from connector
-        connector = connector_registry.get(rule.connector_id)
-        # Determine data type from rule prompt or default to inventory
-        data_type = _infer_data_type(rule.prompt_template)
-        raw_data = await connector.query(data_type)
-
-        # 4. Compute metrics
-        engine = MetricsEngine()
-        if data_type == "inventory":
-            metrics = engine.compute_inventory_metrics(raw_data)
-            summary = SummaryBuilder().build_inventory_summary(metrics)
-        elif data_type == "orders":
-            metrics = engine.compute_order_metrics(raw_data)
-            summary = SummaryBuilder().build_order_summary(metrics)
+        if rule.connector_type == "mcp":
+            # ---- MCP Agent flow ----
+            result = await _run_mcp_pipeline(rule, mcp_manager, analyzer)
         else:
-            metrics = raw_data
-            summary = str(raw_data)
+            # ---- Legacy Connector flow ----
+            result = await _run_legacy_pipeline(rule, connector_registry, analyzer)
 
-        # 5. LLM analysis
-        result = await analyzer.analyze(summary, rule.prompt_template)
-
-        # 6. Dispatch alerts
+        # Dispatch alerts (unified for both flows)
+        source = rule.mcp_server if rule.connector_type == "mcp" else rule.connector_id
         send_results = await dispatcher.dispatch(
             result,
             rule_name=rule.name,
-            source=rule.connector_id,
+            source=source,
             dry_run=dry_run,
         )
 
@@ -108,6 +96,43 @@ async def run_detection_job(
         logger.error("Job {} (rule={}) failed: {}", job_name, rule_id, e)
         await _complete_task_run(task_run, "failed", duration, error=str(e))
         return task_run
+
+
+async def _run_mcp_pipeline(rule: Any, mcp_manager: Any, analyzer: Analyzer) -> AnalyzerOutput:
+    """Execute the MCP Agent pipeline for a rule."""
+    if mcp_manager is None:
+        raise ValueError("MCP manager not configured. Cannot run MCP rule.")
+
+    from order_guard.engine.agent import Agent
+    from order_guard.engine.llm_client import LLMClient
+
+    mcp_conn = mcp_manager.get_connection(rule.mcp_server)
+    if not mcp_conn.is_connected():
+        await mcp_conn.connect()
+
+    agent = Agent(llm_client=LLMClient(), mcp_connection=mcp_conn)
+    result = await agent.run(rule.prompt_template)
+    return result
+
+
+async def _run_legacy_pipeline(rule: Any, connector_registry: ConnectorRegistry, analyzer: Analyzer) -> AnalyzerOutput:
+    """Execute the legacy Connector pipeline for a rule."""
+    connector = connector_registry.get(rule.connector_id)
+    data_type = rule.data_type or _infer_data_type(rule.prompt_template)
+    raw_data = await connector.query(data_type)
+
+    engine = MetricsEngine()
+    if data_type == "inventory":
+        metrics = engine.compute_inventory_metrics(raw_data)
+        summary = SummaryBuilder().build_inventory_summary(metrics)
+    elif data_type == "orders":
+        metrics = engine.compute_order_metrics(raw_data)
+        summary = SummaryBuilder().build_order_summary(metrics)
+    else:
+        metrics = raw_data
+        summary = str(raw_data)
+
+    return await analyzer.analyze(summary, rule.prompt_template)
 
 
 def _infer_data_type(prompt_template: str) -> str:

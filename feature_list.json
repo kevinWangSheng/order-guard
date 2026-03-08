@@ -1,5 +1,5 @@
 {
-  "version": "mvp-v1",
+  "version": "v2",
   "tasks": [
     {
       "id": "T01",
@@ -153,6 +153,142 @@
         "rules list/show 正常显示规则",
         "history 正常查询告警",
         "status 正常显示系统状态"
+      ]
+    },
+    {
+      "id": "T11",
+      "name": "CSV/Excel 数据源 Connector",
+      "layer": "数据源接入",
+      "passes": true,
+      "depends_on": ["T01", "T02", "T04"],
+      "spec": "specs/t11-csv-connector/",
+      "steps": [
+        "CSVConnector 实现 BaseConnector 全部方法",
+        "支持 CSV 和 Excel (.xlsx) 两种格式",
+        "字段映射支持配置和自动推断",
+        "自动检测文件编码",
+        "必填字段缺失时有清晰错误提示",
+        "ConnectorRegistry 中注册了 csv 类型",
+        "示例 CSV 文件已创建",
+        "端到端测试：CSV → 指标计算 → LLM → 告警（dry-run）",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T12",
+      "name": "飞书消息卡片",
+      "layer": "告警优化",
+      "passes": true,
+      "depends_on": ["T08"],
+      "spec": null,
+      "steps": [
+        "飞书 URL 自动识别（feishu.cn / lark.cn）",
+        "单条告警生成飞书交互卡片",
+        "批量告警合并为一张卡片，按严重级别分组",
+        "卡片包含 header、severity emoji、SKU、建议、footer"
+      ]
+    },
+    {
+      "id": "T13",
+      "name": "告警合并推送",
+      "layer": "告警优化",
+      "passes": true,
+      "depends_on": ["T08"],
+      "spec": null,
+      "steps": [
+        "AlertDispatcher.dispatch() 使用 send_batch 一次推送",
+        "WebhookChannel.send_batch() 合并为单条消息",
+        "通用 JSON 格式包含 alert_count 和 alerts 数组"
+      ]
+    },
+    {
+      "id": "T14",
+      "name": "告警静默期/去重",
+      "layer": "告警优化",
+      "passes": true,
+      "depends_on": ["T08"],
+      "spec": null,
+      "steps": [
+        "AlertsConfig.silence_minutes 默认 30 分钟",
+        "同 rule_id + severity + title 在窗口内不重复推送",
+        "被静默的告警保存到 DB，status = silenced",
+        "silence_minutes = 0 时禁用静默",
+        "不同 rule_id 或不同 severity 不受影响",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T16",
+      "name": "MCP Client 基础层",
+      "layer": "MCP 数据源",
+      "passes": true,
+      "depends_on": ["T02"],
+      "spec": "specs/t16-mcp-client/",
+      "steps": [
+        "mcp SDK 安装成功，无依赖冲突",
+        "MCPServerConfig 正确解析 stdio 和 sse 两种传输配置",
+        "MCPConnection 能通过 stdio 连接 MCP Server",
+        "list_tools() 返回可用工具列表",
+        "call_tool() 能调用工具并返回结果",
+        "MCPManager 支持多 Server 连接管理",
+        "FastAPI 启动/关闭时自动连接/断开",
+        "config.example.yaml 包含 mcp_servers 配置段",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T17",
+      "name": "AI Agent 工具调用",
+      "layer": "MCP 数据源",
+      "passes": true,
+      "depends_on": ["T06", "T16"],
+      "spec": "specs/t17-ai-agent/",
+      "steps": [
+        "LLMClient 支持 tool use（tools 参数 + tool_calls 解析）",
+        "MCP 工具正确转换为 LLM function 定义",
+        "Agent 循环正常工作（LLM → tool_call → MCP → 结果 → LLM）",
+        "多轮工具调用场景正常（list_tables → describe → query）",
+        "超过 max_iterations 时强制停止",
+        "工具调用失败时错误回传给 LLM",
+        "Token 用量跨多次调用正确累计",
+        "输出为标准 AnalyzerOutput 格式",
+        "有单元测试（mock LLM + mock MCP）"
+      ]
+    },
+    {
+      "id": "T18",
+      "name": "MCP Connector + Pipeline 适配",
+      "layer": "MCP 数据源",
+      "passes": true,
+      "depends_on": ["T09", "T17"],
+      "spec": "specs/t18-mcp-pipeline/",
+      "steps": [
+        "AlertRule 表新增 connector_type 和 mcp_server 字段",
+        "Alembic 迁移执行无报错",
+        "YAML 中可配置 connector_type: mcp 的规则",
+        "MCP 规则走 Agent 流程，传统规则走 Connector 流程",
+        "两种流程输出格式一致（AnalyzerOutput）",
+        "CLI run 命令能执行 MCP 类型规则",
+        "所有 v1 规则继续正常运行",
+        "有集成测试"
+      ]
+    },
+    {
+      "id": "T19",
+      "name": "端到端验证（SQLite MCP）",
+      "layer": "MCP 数据源",
+      "passes": true,
+      "depends_on": ["T18"],
+      "spec": "specs/t19-e2e-sqlite-mcp/",
+      "steps": [
+        "测试 SQLite 数据库创建成功（含模拟数据）",
+        "SQLite MCP Server 启动无报错",
+        "Agent 自动执行工具调用链（list_tables → describe → query）",
+        "识别出缺货风险 SKU（critical）",
+        "识别出积压风险 SKU（warning）",
+        "dry-run 模式正常工作",
+        "非 dry-run 模式告警推送到飞书",
+        "有 e2e 测试"
       ]
     }
   ]

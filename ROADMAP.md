@@ -29,26 +29,41 @@ T01 → T03 → T07（T02也依赖）
               T10（T09 依赖）
 ```
 
-## 后续版本（待排期）
+## v2: MCP 数据源 + 体验优化
 
-### v2: 真实数据源 + 飞书/企业微信
-- [ ] NetSuite Connector（MCP/REST API）
-- [ ] 飞书 Webhook 推送（特定消息格式）
-- [ ] 企业微信 Webhook 推送
-- [ ] 告警静默期/去重
+### 数据源接入（已完成）
+- [x] **T11: CSV/Excel Connector** — 支持 CSV/Excel 文件导入，字段映射，自动编码检测
 
-### v3: Bot 对话接入
+### 告警优化（已完成）
+- [x] **T12: 飞书消息卡片** — 交互式卡片格式，severity 颜色标识，多告警合并展示
+- [x] **T13: 告警合并推送** — send_batch 一次推送，单条消息包含所有告警
+- [x] **T14: 告警静默期/去重** — silence_minutes 配置，同规则同级别同标题在窗口内不重复推送
+
+### MCP 数据源接入（已完成）
+- [x] **T16: MCP Client 基础层** — MCP SDK 集成，stdio/SSE 传输，多 Server 连接管理，工具发现
+- [x] **T17: AI Agent 工具调用** — LLM function calling + Agent 循环（思考→工具调用→结果→分析）
+- [x] **T18: MCP Connector + Pipeline 适配** — 规则绑定 MCP Server，pipeline 分支（传统 vs MCP Agent）
+- [x] **T19: 端到端验证（SQLite MCP）** — 测试数据库 + SQLite MCP Server 全链路验证
+
+### 任务依赖关系
+```
+T02 → T16(MCP Client) → T17(AI Agent) → T18(Pipeline) → T19(E2E 验证)
+T06 ────────────────────→ T17
+T09 ────────────────────────────────────→ T18
+```
+
+## v3: Bot 对话接入
 - [ ] 飞书 Bot 双向对话
-- [ ] 企业微信 Bot 双向对话
 - [ ] 对话上下文管理
+- [ ] 多 Agent 协作（跨数据源分析）
 - [ ] 权限控制
 
-### v4: 多 LLM + Agent 增强
+## v4: 多 LLM + Agent 增强
 - [ ] 多 LLM 切换（LiteLLM 已内置）
 - [ ] Agent SDK 集成（OpenAI Agents SDK / Pydantic AI）
 - [ ] 规则版本管理
 
-### v5: Web 管理界面
+## v5: Web 管理界面
 - [ ] Dashboard
 - [ ] 规则可视化配置
 - [ ] 告警历史查看

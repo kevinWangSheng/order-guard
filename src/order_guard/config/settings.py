@@ -52,6 +52,7 @@ class AlertChannelConfig(BaseModel):
 
 class AlertsConfig(BaseModel):
     channels: list[AlertChannelConfig] = Field(default_factory=list)
+    silence_minutes: int = 30  # 0 = disabled; skip duplicate alerts within this window
 
 
 class SchedulerJobConfig(BaseModel):
@@ -59,6 +60,19 @@ class SchedulerJobConfig(BaseModel):
     cron: str
     rule_ids: list[str] = Field(default_factory=list)
     connector: str = "mock"
+
+
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server."""
+
+    name: str
+    transport: str = "stdio"  # "stdio" or "sse"
+    command: str | None = None       # stdio mode
+    args: list[str] = Field(default_factory=list)  # stdio mode
+    url: str | None = None           # sse mode
+    headers: dict[str, str] = Field(default_factory=dict)  # sse mode
+    env: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
 
 
 class SchedulerConfig(BaseModel):
@@ -104,6 +118,7 @@ class Settings(BaseSettings):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     connectors: list[ConnectorConfig] = Field(default_factory=list)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
 
     @model_validator(mode="before")

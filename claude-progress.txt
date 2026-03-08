@@ -124,3 +124,111 @@
 ### Next Steps
 - 更新 LLM API Key 后端到端验证完整流程
 - 开始 v2 规划：真实数据源 + 飞书/企业微信
+
+## 2026-03-08 | Session 4: T11 CSV/Excel Connector
+
+### Completed
+- T11: CSV/Excel 数据源 Connector ✓
+  - CSVConnector 实现 BaseConnector 全部方法（health_check, get_inventory, get_orders, get_sales）
+  - 支持 CSV 和 Excel (.xlsx) 两种格式
+  - 字段映射：配置映射 + 自动推断（精确匹配 → 忽略大小写 → 别名匹配）
+  - 自动检测文件编码（chardet，支持 GBK/UTF-8 等）
+  - 必填字段缺失时抛出清晰 ValueError
+  - ConnectorRegistry 注册 "csv" 类型
+  - 示例 CSV 数据文件：inventory.csv, orders.csv, sales.csv, inventory_cn.csv（中文表头）
+  - 19 个单元测试全部通过
+  - 添加 pandas + openpyxl + chardet 依赖
+
+### Current Status
+- 10/10 MVP 任务 + 1/1 v2 任务完成（T11）
+- 项目阶段：v2 数据源接入进行中
+
+### Next Steps
+- v2 其他任务：飞书消息卡片、告警合并、NetSuite Connector 等
+
+## 2026-03-08 | Session 5: v2 体验优化（T12-T15）
+
+### Completed
+- T12: 飞书消息卡片格式 ✓（已在 Session 3 实现，本次确认并标记）
+  - 飞书 URL 自动识别（feishu.cn / lark.cn）
+  - 单条/批量告警生成飞书交互卡片
+  - 按严重级别分组，含 header、emoji、SKU、建议、footer
+- T13: 多条告警合并推送 ✓（已在 Session 3 实现，本次确认并标记）
+  - AlertDispatcher.dispatch() 使用 send_batch
+  - 飞书/企业微信/通用 JSON 都支持批量格式
+- T14: 告警静默期/去重 ✓
+  - AlertsConfig 新增 silence_minutes 配置（默认 30 分钟）
+  - 同 rule_id + severity + title 在窗口内不重复推送
+  - 被静默告警保存到 DB，status = "silenced"
+  - silence_minutes = 0 禁用静默
+  - 11 个单元测试全部通过
+- T15: 企业微信 Webhook 推送 ✓
+  - 自动识别企业微信 URL（qyapi.weixin.qq.com）
+  - Markdown 格式消息，按严重级别分组
+  - 支持单条和批量告警
+  - config.example.yaml 含企业微信和飞书配置示例
+  - 14 个单元测试全部通过
+
+### Current Status
+- 10/10 MVP 任务 + 5/5 v2 体验优化任务完成（T01-T15）
+- v2 仅剩 NetSuite Connector（需要用户提供 API 接入信息）
+- 项目阶段：v2 体验优化完成
+
+### Next Steps
+- NetSuite Connector：需要用户确认 API 类型（REST / SuiteTalk / MCP）和认证方式
+- v3: 飞书/企业微信 Bot 双向对话
+
+## 2026-03-08 | Session 6: MCP 数据源全链路（T16-T19）
+
+### Completed
+- T16: MCP Client 基础层 ✓
+  - mcp SDK 集成（v1.0+）
+  - MCPServerConfig 支持 stdio 和 sse 两种传输
+  - MCPConnection：连接/断开/list_tools/call_tool
+  - MCPManager：多 Server 连接管理
+  - FastAPI lifespan 集成（启动连接/关闭断开）
+  - Settings 新增 mcp_servers 配置段
+  - config.example.yaml 含 MCP 配置示例
+  - 16 个单元测试全部通过
+
+- T17: AI Agent 工具调用 ✓
+  - LLMClient 扩展支持 tools 参数 + tool_calls 解析
+  - ToolInfo → LLM function 定义转换
+  - Agent 循环引擎（LLM → tool_call → MCP → 结果 → 继续）
+  - max_iterations 限制防止无限循环
+  - 工具调用失败时错误回传给 LLM
+  - Token 用量跨多次调用累计
+  - 输出为标准 AnalyzerOutput（兼容现有告警 pipeline）
+  - 11 个单元测试全部通过
+
+- T18: MCP Connector + Pipeline 适配 ✓
+  - AlertRule 表新增 connector_type / mcp_server / data_type 字段
+  - Alembic 迁移 + upgrade/downgrade 验证
+  - scheduler pipeline 分支（connector_type="mcp" → Agent 流程，"legacy" → 传统流程）
+  - CLI run 命令支持 mcp_manager 参数
+  - 规则 YAML 加载支持 MCP 字段
+  - 所有 v1 规则向后兼容（默认 connector_type="legacy"）
+  - 7 个集成测试全部通过
+
+- T19: 端到端验证（SQLite MCP）✓
+  - Python 实现的 SQLite MCP Server（list_tables/describe_table/read_query）
+  - 测试数据库：5 SKU（正常/缺货/积压/高退货/销量骤增场景）
+  - 150 条销售记录 + 580 条订单记录
+  - Agent 全链路验证：8 轮迭代（探索结构→查询数据→分析→输出）
+  - 正确识别：SKU-002 critical（缺货），SKU-003 warning（积压），SKU-004 warning（退货异常）
+  - 11 个 e2e 测试全部通过（含 1 个 LLM 在线测试）
+
+### Verification Results
+- 89/89 全部测试通过（16 MCP client + 11 Agent + 7 Pipeline + 11 e2e + 44 existing）
+- 零回归：所有 v1/v2 既有测试无影响
+- LLM e2e 验证：Qwen3-coder-plus 模型完成 8 轮工具调用，正确分析库存数据
+
+### Current Status
+- 19/19 全部任务完成（T01-T19）
+- v2 MCP 数据源全链路完成
+- 项目阶段：v2 全部完成
+
+### Next Steps
+- v3: 飞书/企业微信 Bot 双向对话
+- v4: 多 LLM + Agent SDK 集成
+- v5: Web 管理界面

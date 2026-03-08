@@ -55,6 +55,9 @@ class RuleManager:
                         description=rule_def.get("description", existing.description),
                         prompt_template=rule_def.get("prompt", existing.prompt_template),
                         connector_id=rule_def.get("connector", existing.connector_id),
+                        connector_type=rule_def.get("connector_type", existing.connector_type),
+                        mcp_server=rule_def.get("mcp_server", existing.mcp_server),
+                        data_type=rule_def.get("data_type", existing.data_type),
                         enabled=rule_def.get("enabled", existing.enabled),
                     )
                     logger.info("Rule synced (updated): {}", rule_id)
@@ -66,6 +69,9 @@ class RuleManager:
                         description=rule_def.get("description", ""),
                         prompt_template=rule_def.get("prompt", ""),
                         connector_id=rule_def.get("connector", ""),
+                        connector_type=rule_def.get("connector_type", "legacy"),
+                        mcp_server=rule_def.get("mcp_server", ""),
+                        data_type=rule_def.get("data_type", ""),
                         enabled=rule_def.get("enabled", True),
                     )
                     await create(session, new_rule)

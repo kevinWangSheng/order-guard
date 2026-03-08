@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -84,11 +87,20 @@ async def _run_detection(rule_id: str | None, dry_run: bool):
     if settings.connectors:
         reg.register_from_config([c.model_dump() for c in settings.connectors])
 
-    dispatcher = AlertDispatcher()
+    dispatcher = AlertDispatcher(silence_minutes=settings.alerts.silence_minutes)
     if not dry_run and settings.alerts.channels:
         dispatcher.register_from_config(settings.alerts.channels)
 
     analyzer = Analyzer()
+
+    # Set up MCP manager if configured
+    mcp_manager = None
+    if settings.mcp_servers:
+        from order_guard.mcp import MCPManager
+        from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
+        mcp_configs = [MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers]
+        mcp_manager = MCPManager(mcp_configs)
+        await mcp_manager.connect_all()
 
     # Determine which rules to run
     if rule_id:
@@ -113,6 +125,7 @@ async def _run_detection(rule_id: str | None, dry_run: bool):
             analyzer=analyzer,
             dispatcher=dispatcher,
             dry_run=dry_run,
+            mcp_manager=mcp_manager,
         )
         if task_run:
             from order_guard.storage.database import get_session
@@ -132,6 +145,10 @@ async def _run_detection(rule_id: str | None, dry_run: bool):
                         if summary.get("has_alerts"):
                             console.print(f"Alerts: {summary.get('alert_count', 0)}")
                         console.print(f"Summary: {summary.get('summary', 'N/A')[:200]}")
+
+    # Cleanup MCP connections
+    if mcp_manager:
+        await mcp_manager.disconnect_all()
 
 
 # ---------------------------------------------------------------------------
@@ -162,12 +179,14 @@ async def _rules_list():
     table = Table(title="Alert Rules")
     table.add_column("ID", style="cyan")
     table.add_column("Name")
-    table.add_column("Connector")
+    table.add_column("Type")
+    table.add_column("Source")
     table.add_column("Enabled", justify="center")
 
     for r in rules:
         enabled = "[green]✓[/green]" if r.enabled else "[red]✗[/red]"
-        table.add_row(r.id, r.name, r.connector_id, enabled)
+        source = r.mcp_server if r.connector_type == "mcp" else r.connector_id
+        table.add_row(r.id, r.name, r.connector_type, source, enabled)
 
     console.print(table)
 

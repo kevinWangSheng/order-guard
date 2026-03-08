@@ -2,6 +2,9 @@
 
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from loguru import logger
 
@@ -35,9 +38,19 @@ async def lifespan(app: FastAPI):
 
     # Set up alert dispatcher
     from order_guard.alerts.dispatcher import AlertDispatcher
-    dispatcher = AlertDispatcher()
+    dispatcher = AlertDispatcher(silence_minutes=settings.alerts.silence_minutes)
     if settings.alerts.channels:
         dispatcher.register_from_config(settings.alerts.channels)
+
+    # Set up MCP connections
+    from order_guard.mcp import MCPManager
+    from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
+    mcp_configs = [
+        MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers
+    ]
+    mcp_manager = MCPManager(mcp_configs)
+    if mcp_configs:
+        await mcp_manager.connect_all()
 
     # Set up scheduler
     from order_guard.engine.analyzer import Analyzer
@@ -55,6 +68,7 @@ async def lifespan(app: FastAPI):
     app.state.connector_registry = connector_registry
     app.state.dispatcher = dispatcher
     app.state.analyzer = analyzer
+    app.state.mcp_manager = mcp_manager
     app.state.scheduler = scheduler
 
     # Start scheduler
@@ -65,6 +79,9 @@ async def lifespan(app: FastAPI):
             logger.info("Scheduler stopping")
     else:
         yield
+
+    # Disconnect MCP servers
+    await mcp_manager.disconnect_all()
 
     logger.info("OrderGuard shutting down")
 

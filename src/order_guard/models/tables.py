@@ -47,6 +47,9 @@ class AlertRule(SQLModel, table=True):
     description: str = ""
     prompt_template: str = ""
     connector_id: str = ""
+    connector_type: str = Field(default="legacy")  # "legacy" | "mcp"
+    mcp_server: str = Field(default="")             # MCP Server name (when connector_type=mcp)
+    data_type: str = Field(default="")              # Data type for legacy connectors
     enabled: bool = True
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

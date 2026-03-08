@@ -21,8 +21,17 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class ToolCall(BaseModel):
+    """Represents a tool call from the LLM."""
+
+    id: str = ""
+    name: str = ""
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class LLMResponse(BaseModel):
     content: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     model: str = ""
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -41,13 +50,19 @@ class LLMClient:
 
     async def completion(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
-        """Call LLM and return structured response."""
+        """Call LLM and return structured response.
+
+        Args:
+            messages: Chat messages (system, user, assistant, tool).
+            tools: Optional list of tool definitions for function calling.
+        """
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
@@ -59,6 +74,8 @@ class LLMClient:
             kwargs["api_base"] = self._api_base
         if response_format:
             kwargs["response_format"] = response_format
+        if tools:
+            kwargs["tools"] = tools
 
         try:
             response = await litellm.acompletion(**kwargs)
@@ -67,7 +84,8 @@ class LLMClient:
         except litellm.APIConnectionError as e:
             raise RuntimeError(f"LLM API connection error: {e}") from e
 
-        content = response.choices[0].message.content or ""
+        message = response.choices[0].message
+        content = message.content or ""
         usage = response.usage
         token_usage = TokenUsage(
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
@@ -75,14 +93,32 @@ class LLMClient:
             total_tokens=getattr(usage, "total_tokens", 0) or 0,
         )
 
+        # Parse tool calls if present
+        tool_calls: list[ToolCall] = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                arguments = tc.function.arguments
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                tool_calls.append(ToolCall(
+                    id=tc.id or "",
+                    name=tc.function.name or "",
+                    arguments=arguments,
+                ))
+
         logger.info(
-            "LLM call: model={} tokens={}",
+            "LLM call: model={} tokens={} tool_calls={}",
             response.model,
             token_usage.total_tokens,
+            len(tool_calls),
         )
 
         return LLMResponse(
             content=content,
+            tool_calls=tool_calls,
             token_usage=token_usage,
             model=response.model or self._model,
         )
