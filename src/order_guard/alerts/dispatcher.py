@@ -23,7 +23,6 @@ class AlertDispatcher:
         self._channels: list[BaseAlertChannel] = []
 
     def register_from_config(self, channels_config: list[AlertChannelConfig]) -> None:
-        """Register channels from configuration."""
         for cfg in channels_config:
             if not cfg.enabled:
                 continue
@@ -43,15 +42,16 @@ class AlertDispatcher:
         *,
         dry_run: bool = False,
     ) -> list[SendResult]:
-        """Convert AI output to alerts, save to DB, and push to channels."""
+        """Convert AI output to alerts, save to DB, and push to channels (batched)."""
         if not analyzer_output.has_alerts:
             logger.info("No alerts to dispatch")
             return []
 
-        results: list[SendResult] = []
+        # 1. Save all alerts to DB + build messages
+        messages: list[AlertMessage] = []
+        db_alert_ids: list[str] = []
 
         for alert_item in analyzer_output.alerts:
-            # Build message
             msg = AlertMessage(
                 severity=alert_item.severity,
                 title=alert_item.title,
@@ -61,28 +61,31 @@ class AlertDispatcher:
                 rule_name=rule_name,
                 source=source,
             )
+            messages.append(msg)
 
-            # Save to DB
             db_alert = await self._save_alert(alert_item, rule_name)
+            db_alert_ids.append(db_alert.id if db_alert else "")
 
-            if dry_run:
+        # 2. Dry run — log and return
+        if dry_run:
+            for msg in messages:
                 logger.info("[DRY RUN] Would send alert: {}", msg.title)
-                results.append(SendResult(success=True, channel_name="dry-run", attempts=0))
-                continue
+            return [SendResult(success=True, channel_name="dry-run", attempts=0)]
 
-            # Send to all channels
-            for channel in self._channels:
-                result = await channel.send(msg)
-                results.append(result)
+        # 3. Send batched to each channel (one message per channel)
+        results: list[SendResult] = []
+        for channel in self._channels:
+            result = await channel.send_batch(messages, rule_name=rule_name, source=source)
+            results.append(result)
 
-                # Update DB status
-                if db_alert:
-                    await self._update_alert_status(db_alert.id, result)
+            # Update all DB alerts with send status
+            for alert_id in db_alert_ids:
+                if alert_id:
+                    await self._update_alert_status(alert_id, result)
 
         return results
 
     async def _save_alert(self, item: AlertItem, rule_id: str) -> Alert | None:
-        """Save alert record to database."""
         try:
             async with get_session() as session:
                 alert = Alert(
@@ -99,7 +102,6 @@ class AlertDispatcher:
             return None
 
     async def _update_alert_status(self, alert_id: str, result: SendResult) -> None:
-        """Update alert status after send attempt."""
         try:
             async with get_session() as session:
                 alert = await get_by_id(session, Alert, alert_id)

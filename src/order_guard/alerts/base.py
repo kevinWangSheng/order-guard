@@ -38,5 +38,18 @@ class BaseAlertChannel(ABC):
 
     @abstractmethod
     async def send(self, alert: AlertMessage) -> SendResult:
-        """Send an alert message. Returns result with success/failure info."""
+        """Send a single alert message."""
         ...
+
+    async def send_batch(self, alerts: list[AlertMessage], rule_name: str = "", source: str = "") -> SendResult:
+        """Send a batch of alerts as one aggregated message.
+
+        Default implementation calls send() for each alert.
+        Channels that support batching should override this.
+        """
+        last_result = SendResult(success=True, channel_name=self.name)
+        for alert in alerts:
+            result = await self.send(alert)
+            if not result.success:
+                last_result = result
+        return last_result
