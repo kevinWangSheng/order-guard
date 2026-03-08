@@ -15,8 +15,18 @@ class MCPManager:
         self._connections: dict[str, MCPConnection] = {}
         if configs:
             for config in configs:
-                if config.enabled:
-                    self._connections[config.name] = MCPConnection(config)
+                if not config.enabled:
+                    continue
+                resolved = self._resolve_config(config)
+                self._connections[config.name] = MCPConnection(resolved)
+
+    @staticmethod
+    def _resolve_config(config: MCPServerConfig) -> MCPServerConfig:
+        """Resolve DBHub configs into runnable stdio configs."""
+        if config.type == "dbhub":
+            from order_guard.mcp.dbhub import prepare_dbhub_config
+            return prepare_dbhub_config(config)
+        return config
 
     async def connect_all(self) -> None:
         """Connect to all configured MCP servers. Individual failures don't block others."""

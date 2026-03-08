@@ -1,5 +1,5 @@
 {
-  "version": "v2",
+  "version": "v3",
   "tasks": [
     {
       "id": "T01",
@@ -289,6 +289,113 @@
         "dry-run 模式正常工作",
         "非 dry-run 模式告警推送到飞书",
         "有 e2e 测试"
+      ]
+    },
+    {
+      "id": "T20",
+      "name": "DBHub 集成",
+      "layer": "生产数据源",
+      "passes": true,
+      "depends_on": ["T16"],
+      "spec": "specs/t20-dbhub-integration/",
+      "steps": [
+        "DBHub 可通过 npx 正常安装和启动",
+        "配置正确解析 dsn 和安全参数",
+        "DBHub 通过 stdio 连接 SQLite 测试数据库",
+        "Agent 能调用 search_objects 探索 schema",
+        "Agent 能调用 execute_sql 查询数据",
+        "readonly 模式下写操作被拒绝",
+        "query_timeout 超时保护生效",
+        "max_rows 行数限制生效",
+        "config.example.yaml 包含 DBHub 配置示例",
+        "有数据库连接指南文档",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T21",
+      "name": "Schema 防幻觉",
+      "layer": "生产数据源",
+      "passes": false,
+      "depends_on": ["T17", "T20"],
+      "spec": "specs/t21-schema-anti-hallucination/",
+      "steps": [
+        "Agent 启动时自动加载数据库 schema",
+        "schema context 包含字段名、类型、注释、外键、索引",
+        "敏感表/字段黑名单过滤生效",
+        "AI 使用真实存在的表名和字段名",
+        "引用不存在的表/字段时有清晰错误提示",
+        "样例数据帮助 AI 理解数据格式",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T22",
+      "name": "热冷数据 + 查询优化",
+      "layer": "生产数据源",
+      "passes": false,
+      "depends_on": ["T21"],
+      "spec": "specs/t22-hot-cold-data/",
+      "steps": [
+        "规则可配置 data_window 时间窗口",
+        "Agent prompt 自动包含时间约束",
+        "Agent 对大表先 COUNT 再采样",
+        "不出现无 WHERE 无 LIMIT 的全表扫描",
+        "冷数据表在 schema 中标记为归档",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T23",
+      "name": "查询审计",
+      "layer": "生产数据源",
+      "passes": false,
+      "depends_on": ["T17", "T20"],
+      "spec": "specs/t23-query-audit/",
+      "steps": [
+        "query_logs 表创建成功",
+        "Agent 执行的每条 SQL 自动记录",
+        "记录包含 sql、status、rows_returned、duration_ms",
+        "CLI queries 命令正常显示查询历史",
+        "支持 --rule、--status、--stats 过滤",
+        "异常查询（超时/被拒绝）正确记录",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "T24",
+      "name": "飞书 Bot 对话",
+      "layer": "Bot 对话",
+      "passes": false,
+      "depends_on": ["T12", "T20"],
+      "spec": "specs/t24-feishu-bot/",
+      "steps": [
+        "飞书 Event 回调路由正常响应",
+        "URL 验证（challenge）正常返回",
+        "@机器人消息正确解析",
+        "Agent 连接 MCP Server 查数据并回复",
+        "回复使用飞书消息卡片格式",
+        "多轮对话保持上下文",
+        "权限控制生效（无权限用户被拒绝）",
+        "飞书 Bot 创建指南文档完整",
+        "有单元测试（mock 飞书 API）"
+      ]
+    },
+    {
+      "id": "T25",
+      "name": "清理传统数据流",
+      "layer": "架构清理",
+      "passes": false,
+      "depends_on": ["T20", "T21", "T22", "T23", "T24"],
+      "spec": "specs/t25-legacy-cleanup/",
+      "steps": [
+        "connectors 包已移除（base / mock / csv / registry）",
+        "MetricsEngine 和 SummaryBuilder 已移除",
+        "pipeline 中无传统分支代码",
+        "AlertRule 已移除 connector_id / data_type 字段",
+        "Alembic 迁移执行无报错",
+        "MCP Agent 流程正常工作无回归",
+        "所有测试通过"
       ]
     }
   ]

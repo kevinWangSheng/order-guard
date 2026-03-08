@@ -52,14 +52,32 @@ T06 ────────────────────→ T17
 T09 ────────────────────────────────────→ T18
 ```
 
-## v3: Bot 对话接入
-- [ ] 飞书 Bot 双向对话
-- [ ] 对话上下文管理
-- [ ] 多 Agent 协作（跨数据源分析）
-- [ ] 权限控制
+## v3: 生产数据源 + 飞书 Bot
 
-## v4: 多 LLM + Agent 增强
-- [ ] 多 LLM 切换（LiteLLM 已内置）
+### 数据库安全接入
+- [x] **T20: DBHub 集成** — DBHub 作为数据库 MCP Server，配置化支持 MySQL/PG/SQLite，readonly + timeout + row limit
+- [ ] **T21: Schema 防幻觉** — schema 自动注入 Agent context，敏感表/字段黑名单，SQL 字段校验（SQLGlot）
+- [ ] **T22: 热冷数据 + 查询优化** — 规则时间窗口，大表分步查询策略，冷数据表标记，查询缓存
+- [ ] **T23: 查询审计** — query_logs 记录所有 AI 执行的 SQL，CLI 查看，异常查询检测
+
+### 飞书 Bot 对话
+- [ ] **T24: 飞书 Bot 对话** — Event 回调接入，@机器人查数据，多轮对话，权限控制
+
+### 架构清理
+- [ ] **T25: 清理传统数据流** — 移除 v1 传统流程（MetricsEngine / SummaryBuilder / 固定 Connector），全面切换 MCP Agent
+
+### 任务依赖关系
+```
+T16 → T20(DBHub) → T21(Schema 防幻觉) → T22(热冷数据)
+T17 ──────────────→ T21
+T20 → T23(查询审计)
+T20 + T12 → T24(飞书 Bot)
+T20-T24 全部完成 → T25(清理传统数据流)
+```
+
+## v4: MCP 规范检测 + Agent 增强
+- [ ] 第三方 MCP Server 安全规范检测（不规范提醒）
+- [ ] 多 Agent 协作（跨数据源联合分析）
 - [ ] Agent SDK 集成（OpenAI Agents SDK / Pydantic AI）
 - [ ] 规则版本管理
 

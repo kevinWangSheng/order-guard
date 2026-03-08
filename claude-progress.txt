@@ -229,6 +229,76 @@
 - 项目阶段：v2 全部完成
 
 ### Next Steps
-- v3: 飞书/企业微信 Bot 双向对话
-- v4: 多 LLM + Agent SDK 集成
-- v5: Web 管理界面
+- v3: 生产数据源 + 飞书 Bot
+
+## 2026-03-08 | Session 7: v2/v3 任务规划与设计
+
+### Completed
+- 与用户讨论 v2 路线调整：
+  - NetSuite Connector 改为 MCP 通用对接（个人开发者无法获取 NetSuite 企业账号）
+  - 调研 NetSuite 测试可用性、MCP 生态、数据库 MCP Server
+  - 确认方向：通用数据库 MCP > SaaS MCP，AI 自主探索+取数
+- v2 任务重新编号：
+  - 旧 T12-T15（飞书卡片/告警合并/告警去重/企业微信）→ 保留 T12-T14，去掉企业微信 T15
+  - 新 T16-T19：MCP Client → AI Agent → Pipeline 适配 → E2E 验证（已完成）
+- v3 任务规划（T20-T25）：
+  - T20: DBHub 集成 — 用 DBHub（Bytebase 开源）替代官方 MCP Server（已归档、有 SQL 注入漏洞）
+  - T21: Schema 防幻觉 — schema 注入 Agent context + 敏感字段黑名单 + SQLGlot 校验
+  - T22: 热冷数据 + 查询优化 — 时间窗口 + 大表策略 + 冷数据标记
+  - T23: 查询审计 — SQL 日志 + CLI 查看 + 异常检测
+  - T24: 飞书 Bot 对话 — Event 回调 + @机器人查数据 + 多轮对话 + 权限控制
+  - T25: 清理传统数据流 — 移除 v1 传统流程（MetricsEngine / Connector / SummaryBuilder）
+- 调研结论记录：
+  - 官方 MCP 数据库 Server 已被 Anthropic 归档，不适合生产使用
+  - DBHub（Bytebase）是目前最成熟的数据库 MCP Server（readonly + row limit + timeout）
+  - 企业微信 Webhook 需要群内至少 3 人，用户暂无条件创建
+- v4 预留：MCP 规范检测（接入第三方 MCP Server 时检测安全合规性）
+
+### 设计决策记录
+- v3 不自建数据库 MCP Server，用 DBHub + OrderGuard 侧安全增强
+- v3 后传统数据流不再扩展，T25 确认 MCP Agent 稳定后清理
+- 每条规则绑定一个 MCP Server，v3 解决单数据源场景，跨数据源（多 Agent）放 v4
+- 飞书 Bot 对话复用 v2 的 Agent 能力 + T12 的飞书卡片能力
+
+### Current Status
+- 19/19 已完成任务（T01-T19）
+- 6 个 v3 新任务已规划（T20-T25）
+- 项目阶段：v2 全部完成，v3 spec 设计完成，准备开发
+
+### Next Steps
+- 开始 T20: DBHub 集成
+- 然后 T21 → T22/T23 → T24 → T25
+
+## 2026-03-08 | Session 8: T20 DBHub 集成
+
+### Completed
+- T20: DBHub 集成 ✓
+  - DBHubDatabaseConfig + DBHubSecurityConfig 配置模型
+  - TOML 自动生成：[[sources]] + [[tools]] 段，支持 readonly / max_rows / query_timeout
+  - build_dbhub_command：自动构建 `npx -y @bytebase/dbhub --config=... --transport stdio`
+  - MCPManager 适配 type="dbhub"：自动检测 → 生成 TOML → 构建命令 → stdio 连接
+  - Settings MCPServerConfig 新增 type / databases / security 字段（向后兼容 generic 类型）
+  - config.example.yaml 包含 DBHub SQLite / MySQL / PostgreSQL 配置示例
+  - docs/database-setup.md：数据库连接指南（DSN 格式、只读账号创建、多数据库配置、故障排查）
+  - 20 个单元测试 + 5 个 e2e 测试（DBHub 连接、execute_sql、readonly 拒绝写操作、max_rows 限制）
+  - 全量 114 个测试通过（112 passed + 2 skipped），零回归
+
+### Verification Results
+- ✓ DBHub v0.18.0 通过 npx 安装并启动成功
+- ✓ TOML 配置正确解析 dsn + security 参数
+- ✓ DBHub 通过 stdio 连接 SQLite test_warehouse.db
+- ✓ execute_sql 正常查询数据（SELECT 返回 JSON 结果）
+- ✓ readonly 模式下 DELETE 被拒绝
+- ✓ max_rows=2 限制结果行数
+- ✓ query_timeout 配置传递到 TOML [[sources]]
+- ✓ 多数据库配置（多个 [[sources]] + [[tools]]）
+- ⚠ search_objects 在 TOML 模式下未暴露（DBHub v0.18.0 限制，Agent 可通过 execute_sql 探索 schema）
+
+### Current Status
+- 20/25 任务完成（T01-T20）
+- 项目阶段：v3 生产数据源进行中
+
+### Next Steps
+- T21: Schema 防幻觉
+- T22: 热冷数据 + 查询优化
+- T23: 查询审计

@@ -58,8 +58,53 @@ alerts:
 # 通过 MCP 协议连接外部数据源（数据库、SaaS 等）
 # Connect external data sources via MCP protocol
 mcp_servers:
-  # SQLite 数据库示例（stdio 传输）/ SQLite example (stdio transport)
+  # ────────────────────────────────────────────────────────────
+  # DBHub 数据库连接（推荐）/ DBHub database connection (recommended)
+  # 使用 Bytebase DBHub 作为数据库 MCP Server，内置 readonly + row limit + timeout
+  # ────────────────────────────────────────────────────────────
+
+  # DBHub + SQLite 示例（开发测试）/ DBHub + SQLite example (dev/test)
+  # - name: "test-warehouse"
+  #   type: "dbhub"
+  #   databases:
+  #     - alias: "warehouse"
+  #       dsn: "sqlite:///data/test_warehouse.db"
+  #   security:
+  #     readonly: true
+  #     max_rows: 1000
+  #   enabled: true
+
+  # DBHub + MySQL 示例（生产）/ DBHub + MySQL example (production)
+  # - name: "production-erp"
+  #   type: "dbhub"
+  #   databases:
+  #     - alias: "erp"
+  #       dsn: "mysql://readonly_user:${DB_PASSWORD}@host:3306/erp_db"
+  #       query_timeout: 10
+  #   security:
+  #     readonly: true
+  #     max_rows: 500
+  #   enabled: true
+
+  # DBHub + PostgreSQL 示例 / DBHub + PostgreSQL example
+  # - name: "analytics-db"
+  #   type: "dbhub"
+  #   databases:
+  #     - alias: "analytics"
+  #       dsn: "postgres://readonly:${PG_PASSWORD}@pg-host:5432/analytics?sslmode=require"
+  #       query_timeout: 15
+  #   security:
+  #     readonly: true
+  #     max_rows: 2000
+  #   enabled: true
+
+  # ────────────────────────────────────────────────────────────
+  # 通用 MCP Server / Generic MCP Server
+  # ────────────────────────────────────────────────────────────
+
+  # 通用 stdio MCP Server / Generic stdio MCP Server
   # - name: "warehouse-db"
+  #   type: "generic"
   #   transport: "stdio"
   #   command: "npx"
   #   args: ["-y", "@modelcontextprotocol/server-sqlite", "data/warehouse.db"]
@@ -67,6 +112,7 @@ mcp_servers:
 
   # 远程 MCP Server 示例（SSE 传输）/ Remote MCP example (SSE transport)
   # - name: "erp-api"
+  #   type: "generic"
   #   transport: "sse"
   #   url: "https://erp-mcp.company.com/sse"
   #   headers:

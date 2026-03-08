@@ -7,17 +7,36 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class DBHubDatabaseConfig(BaseModel):
+    """A single database source for DBHub."""
+
+    alias: str                       # e.g. "warehouse", "erp"
+    dsn: str                         # e.g. "sqlite:///data/warehouse.db"
+    query_timeout: int | None = None  # seconds, None = no limit
+
+
+class DBHubSecurityConfig(BaseModel):
+    """Security settings applied to DBHub tools."""
+
+    readonly: bool = True
+    max_rows: int = 1000
+
+
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
     name: str
-    transport: Literal["stdio", "sse"]
-    command: str | None = None       # stdio mode
-    args: list[str] = Field(default_factory=list)  # stdio mode
+    type: str = "generic"            # "generic" | "dbhub"
+    transport: Literal["stdio", "sse"] = "stdio"
+    command: str | None = None       # stdio mode (generic)
+    args: list[str] = Field(default_factory=list)  # stdio mode (generic)
     url: str | None = None           # sse mode
     headers: dict[str, str] = Field(default_factory=dict)  # sse mode
     env: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
+    # DBHub-specific fields
+    databases: list[DBHubDatabaseConfig] = Field(default_factory=list)
+    security: DBHubSecurityConfig = Field(default_factory=DBHubSecurityConfig)
 
 
 class ToolInfo(BaseModel):

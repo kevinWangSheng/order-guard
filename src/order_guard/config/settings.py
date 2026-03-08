@@ -62,17 +62,32 @@ class SchedulerJobConfig(BaseModel):
     connector: str = "mock"
 
 
+class MCPDBHubDatabaseConfig(BaseModel):
+    alias: str
+    dsn: str
+    query_timeout: int | None = None
+
+
+class MCPDBHubSecurityConfig(BaseModel):
+    readonly: bool = True
+    max_rows: int = 1000
+
+
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
     name: str
-    transport: str = "stdio"  # "stdio" or "sse"
-    command: str | None = None       # stdio mode
-    args: list[str] = Field(default_factory=list)  # stdio mode
+    type: str = "generic"            # "generic" | "dbhub"
+    transport: str = "stdio"         # "stdio" or "sse"
+    command: str | None = None       # stdio mode (generic)
+    args: list[str] = Field(default_factory=list)  # stdio mode (generic)
     url: str | None = None           # sse mode
     headers: dict[str, str] = Field(default_factory=dict)  # sse mode
     env: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
+    # DBHub-specific fields
+    databases: list[MCPDBHubDatabaseConfig] = Field(default_factory=list)
+    security: MCPDBHubSecurityConfig = Field(default_factory=MCPDBHubSecurityConfig)
 
 
 class SchedulerConfig(BaseModel):
