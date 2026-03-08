@@ -82,7 +82,7 @@
       "id": "T06",
       "name": "AI 层",
       "layer": "核心引擎",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T02", "T05"],
       "spec": "specs/t06-ai-layer/",
       "steps": [
