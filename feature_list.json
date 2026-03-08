@@ -67,7 +67,7 @@
       "id": "T05",
       "name": "指标计算",
       "layer": "核心引擎",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T04"],
       "spec": "specs/t05-metrics/",
       "steps": [
