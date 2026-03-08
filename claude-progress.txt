@@ -70,3 +70,57 @@
 - T02: 配置管理（Pydantic Settings + YAML + 环境变量覆盖）
 - T03: 存储层
 - T04: 数据对接
+
+### Session 3 continued: T02-T10 全部完成
+
+#### T02: 配置管理 ✓
+- Pydantic Settings + YAML + ${VAR} 环境变量引用 + OG_ 前缀覆盖
+- SecretStr 保护敏感信息，get_settings() 全局单例
+
+#### T03: 存储层 ✓
+- 4 个 SQLModel 模型（alerts, alert_rules, task_runs, data_sources）
+- Alembic 初始迁移 + upgrade/downgrade 验证
+- Async session + 通用 CRUD
+
+#### T04: 数据对接 ✓
+- BaseConnector ABC + MockConnector（9 SKU，含缺货/积压/高退货率场景）
+- ConnectorRegistry 按 name 查找
+
+#### T05: 指标计算 ✓
+- days_of_stock, stock_risk, return_rate 计算
+- SummaryBuilder 输出 Markdown 表格
+- 边界处理（零销量不除零，空数据集不报错）
+
+#### T06: AI 层 ✓
+- LiteLLM 封装 + PromptBuilder + Analyzer
+- JSON Schema 输出 + 重试机制 + token 追踪
+- ⚠ API Key 已过期，代码逻辑完整但未在线验证
+
+#### T07: 规则管理 ✓
+- YAML 加载 + DB 同步 + CRUD
+- 2 条内置规则（库存风险、退货率）
+
+#### T08: 告警推送 ✓
+- WebhookChannel POST + 指数退避重试
+- AlertDispatcher 多渠道 + DB 状态记录 + dry-run
+
+#### T09: 调度层 ✓
+- APScheduler + FastAPI lifespan 集成
+- 完整 pipeline：rule → data → metrics → LLM → alert
+- task_runs 记录 + 失败隔离
+
+#### T10: CLI 入口 ✓
+- serve / run / rules list|show / history / status 全部实现
+- Rich 表格输出 + --dry-run 支持
+
+### Current Status
+- 10/10 MVP 任务完成
+- 项目阶段：MVP v1 完成
+
+### Known Issues
+- LLM API Key 已过期，需要用户更新 .env 中的 OG_LLM_API_KEY
+- Docker 未在本机安装，Dockerfile/docker-compose.yml 未本地验证
+
+### Next Steps
+- 更新 LLM API Key 后端到端验证完整流程
+- 开始 v2 规划：真实数据源 + 飞书/企业微信
