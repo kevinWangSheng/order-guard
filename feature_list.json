@@ -1,0 +1,159 @@
+{
+  "version": "mvp-v1",
+  "tasks": [
+    {
+      "id": "T01",
+      "name": "项目骨架",
+      "layer": "基础层",
+      "passes": true,
+      "depends_on": [],
+      "spec": "specs/t01-project-skeleton/",
+      "steps": [
+        "pyproject.toml 包含所有核心依赖",
+        "src/order_guard/ 目录结构完整",
+        "FastAPI 应用启动并响应 GET /health",
+        "CLI 命令 order-guard --version 正常执行",
+        "loguru 日志输出到控制台和文件",
+        "Docker 构建和运行无报错"
+      ]
+    },
+    {
+      "id": "T02",
+      "name": "配置管理",
+      "layer": "基础层",
+      "passes": false,
+      "depends_on": ["T01"],
+      "spec": "specs/t02-config/",
+      "steps": [
+        "config.example.yaml 包含所有配置项 + 注释",
+        "YAML 配置正确解析所有配置项",
+        "环境变量覆盖机制正确（OG_ 前缀）",
+        "敏感信息支持环境变量引用",
+        "配置错误时给出校验提示",
+        "get_settings() 返回全局单例"
+      ]
+    },
+    {
+      "id": "T03",
+      "name": "存储层",
+      "layer": "基础层",
+      "passes": false,
+      "depends_on": ["T01", "T02"],
+      "spec": "specs/t03-storage/",
+      "steps": [
+        "4 个 SQLModel 模型可正常建表",
+        "Alembic upgrade/downgrade 执行无报错",
+        "async session 正确管理",
+        "CRUD 函数覆盖 create/get/list/update",
+        "JSON 字段正确序列化和反序列化"
+      ]
+    },
+    {
+      "id": "T04",
+      "name": "数据对接",
+      "layer": "核心引擎",
+      "passes": false,
+      "depends_on": ["T01", "T02"],
+      "spec": "specs/t04-connectors/",
+      "steps": [
+        "BaseConnector 抽象类定义清晰",
+        "MockConnector 返回贴近真实电商的数据",
+        "Mock 数据含异常场景（缺货、积压、高退货率）",
+        "ConnectorRegistry 支持按 name 查找",
+        "health_check() 返回连接状态"
+      ]
+    },
+    {
+      "id": "T05",
+      "name": "指标计算",
+      "layer": "核心引擎",
+      "passes": false,
+      "depends_on": ["T04"],
+      "spec": "specs/t05-metrics/",
+      "steps": [
+        "库存指标计算正确（days_of_stock, stock_risk）",
+        "订单指标计算正确（return_rate）",
+        "边界情况处理（日均销量为0不除零报错）",
+        "SummaryBuilder 输出 Markdown 表格格式",
+        "空数据集返回空摘要而非报错"
+      ]
+    },
+    {
+      "id": "T06",
+      "name": "AI 层",
+      "layer": "核心引擎",
+      "passes": false,
+      "depends_on": ["T02", "T05"],
+      "spec": "specs/t06-ai-layer/",
+      "steps": [
+        "LiteLLM 封装可正常调用 LLM API",
+        "Prompt 组装包含系统提示、规则、数据摘要",
+        "输出符合定义的 JSON Schema",
+        "格式校验 + 重试逻辑工作正常",
+        "token 用量被记录",
+        "API Key 无效时抛出清晰错误"
+      ]
+    },
+    {
+      "id": "T07",
+      "name": "规则管理",
+      "layer": "核心引擎",
+      "passes": false,
+      "depends_on": ["T02", "T03"],
+      "spec": "specs/t07-rules/",
+      "steps": [
+        "YAML 规则加载 + DB 同步逻辑正确",
+        "2 条内置示例规则可正常加载",
+        "CRUD 函数工作正常",
+        "规则关联 connector 信息可查",
+        "规则启用/禁用切换正常"
+      ]
+    },
+    {
+      "id": "T08",
+      "name": "告警推送",
+      "layer": "集成层",
+      "passes": false,
+      "depends_on": ["T03", "T06"],
+      "spec": "specs/t08-alerts/",
+      "steps": [
+        "WebhookChannel 成功 POST JSON 到目标 URL",
+        "推送失败时重试最多 3 次（指数退避）",
+        "推送结果正确写入 alerts 表",
+        "AlertDispatcher 支持多渠道同时推送",
+        "告警消息包含级别、标题、摘要、详情、建议"
+      ]
+    },
+    {
+      "id": "T09",
+      "name": "调度层",
+      "layer": "集成层",
+      "passes": false,
+      "depends_on": ["T02", "T03", "T04", "T05", "T06", "T07", "T08"],
+      "spec": "specs/t09-scheduler/",
+      "steps": [
+        "APScheduler 和 FastAPI 共存正常",
+        "Cron 表达式正确解析并按时触发",
+        "完整检测流程端到端走通",
+        "task_runs 表正确记录每次执行",
+        "任务失败不影响其他任务"
+      ]
+    },
+    {
+      "id": "T10",
+      "name": "CLI 入口",
+      "layer": "集成层",
+      "passes": false,
+      "depends_on": ["T09"],
+      "spec": "specs/t10-cli/",
+      "steps": [
+        "serve 命令启动 FastAPI + Scheduler",
+        "run 命令端到端执行检测流程",
+        "--dry-run 不推送只输出",
+        "rules list/show 正常显示规则",
+        "history 正常查询告警",
+        "status 正常显示系统状态"
+      ]
+    }
+  ]
+}

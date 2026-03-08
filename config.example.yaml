@@ -1,0 +1,25 @@
+# OrderGuard 配置文件示例
+# 环境变量可覆盖以下配置（OG_ 前缀）
+
+app:
+  name: OrderGuard
+  version: "0.1.0"
+
+# LLM 配置
+llm:
+  api_key: "${OG_LLM_API_KEY}"
+  api_base: "https://api.openai.com/v1"
+  model: "openai/gpt-4o"
+
+# 数据库
+database:
+  url: "sqlite:///data/orderguard.db"
+
+# 日志
+logging:
+  level: "INFO"
+  dir: "logs"
+
+# 告警渠道
+alerts:
+  webhook_url: "${OG_FEISHU_WEBHOOK_URL}"

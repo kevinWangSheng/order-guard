@@ -1,0 +1,72 @@
+# OrderGuard Progress Log
+
+## 2026-03-05 | Session 1: Project Initialization
+
+### Completed
+- Created PRD.md with 8 features (F1-F8), 4 milestones
+- Created ROADMAP.md with task tracking
+- Created feature_list.json with acceptance steps for all features
+- Created CLAUDE.md with development protocol
+- Created .claude/rules/ (session-protocol, verification, boundaries, git-workflow)
+
+## 2026-03-07 | Session 2: 架构设计 + 任务拆分
+
+### Completed
+- 与用户讨论客户需求，明确产品定位：企业数据智能监控中台
+- 调研类似开源项目（Dify, HolmesGPT, NetSuite MCP servers, 企业微信/飞书 SDK 等）
+- 确认五层架构：触达层 → 调度层 → 核心引擎层 → AI 层 → 存储层
+- 确认存储层方案：SQLModel + SQLite(默认)/PostgreSQL(可选) + Alembic
+- 确认技术栈：Python 3.11+ / FastAPI / SQLModel / LiteLLM / APScheduler / Typer / httpx / loguru / uv
+- 调研任务拆分最佳实践（GitHub Spec Kit, cc-sdd, RFC template）
+- 创建 ARCHITECTURE.md 架构设计文档
+- 重构 ROADMAP.md 为 MVP v1 任务列表（T01-T10）
+- 重构 feature_list.json 为 MVP v1 任务跟踪
+- 创建 specs/ 目录，为 T01-T10 每个任务编写 plan.md + eval.md
+
+### 设计决策记录
+- 语言选 Python：LLM/Agent 生态最好，客户场景匹配
+- 数据源用 Adapter 模式：可插拔，MVP 用 Mock，后续按接口接真实 ERP
+- 规则用 Prompt 模板：业务人员自然语言写规则，但数据预处理用代码保证计算准确
+- LLM 调用用 LiteLLM：一行配置切模型，不绑定单一厂商
+- 存储用 SQLModel：Pydantic + SQLAlchemy 合体，和 FastAPI 天然集成
+- 后续可选：Any-Agent（Agent SDK 抽象）、Pydantic AI（Agent 框架）
+
+### Current Status
+- 0/10 MVP 任务完成
+- 项目阶段：架构设计完成，准备开始编码
+
+### Next Steps
+- 开始 T01: 项目骨架（pyproject.toml, 目录结构, FastAPI/CLI 入口, Docker）
+- 然后 T02: 配置管理
+- 然后 T03: 存储层
+
+## 2026-03-07 | Session 3: T01 项目骨架
+
+### Completed
+- T01: 项目骨架 ✓
+  - pyproject.toml：所有核心依赖（FastAPI, SQLModel, LiteLLM, APScheduler, httpx, typer, loguru 等）
+  - src/order_guard/ 完整目录结构（9个子包，每个有 __init__.py）
+  - main.py：FastAPI 应用 + /health 端点 + lifespan 管理
+  - cli.py：Typer CLI + --version + serve 命令
+  - logging.py：loguru 配置（控制台 + JSON 文件，按日轮转）
+  - Dockerfile + docker-compose.yml（Docker 未安装，无法本地验证）
+  - .env.example + config.example.yaml
+  - README.md
+  - tests/__init__.py
+  - git init
+
+### Verification Results
+- ✓ `uv sync` 安装 73 个包无报错
+- ✓ `uv run order-guard --version` → `order-guard 0.1.0`
+- ✓ FastAPI 启动并响应 GET /health → `{"status":"ok"}`
+- ✓ loguru 日志输出到控制台和 logs/ 目录（JSON 格式）
+- ⚠ Docker 构建未测试（本机未安装 Docker）
+
+### Current Status
+- 1/10 MVP 任务完成
+- 项目阶段：基础骨架完成，进入配置管理
+
+### Next Steps
+- T02: 配置管理（Pydantic Settings + YAML + 环境变量覆盖）
+- T03: 存储层
+- T04: 数据对接
