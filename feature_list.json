@@ -37,7 +37,7 @@
       "id": "T03",
       "name": "存储层",
       "layer": "基础层",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T01", "T02"],
       "spec": "specs/t03-storage/",
       "steps": [
