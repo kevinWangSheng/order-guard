@@ -113,7 +113,7 @@
       "id": "T08",
       "name": "告警推送",
       "layer": "集成层",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T03", "T06"],
       "spec": "specs/t08-alerts/",
       "steps": [

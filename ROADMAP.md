@@ -16,7 +16,7 @@
 - [x] **T07: 规则管理** — Prompt 模板加载 + CRUD + 示例规则
 
 ### 集成层
-- [ ] **T08: 告警推送** — 通用 Webhook + 重试 + 推送记录
+- [x] **T08: 告警推送** — 通用 Webhook + 重试 + 推送记录
 - [ ] **T09: 调度层** — APScheduler + 完整检测流程编排
 - [ ] **T10: CLI 入口** — serve / run / rules / history / status 命令
 
