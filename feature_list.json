@@ -52,7 +52,7 @@
       "id": "T04",
       "name": "数据对接",
       "layer": "核心引擎",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T01", "T02"],
       "spec": "specs/t04-connectors/",
       "steps": [

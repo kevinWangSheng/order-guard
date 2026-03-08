@@ -10,7 +10,7 @@
 - [x] **T03: 存储层** — SQLModel + SQLite + Alembic 迁移
 
 ### 核心引擎
-- [ ] **T04: 数据对接** — Adapter 接口 + Mock 数据源
+- [x] **T04: 数据对接** — Adapter 接口 + Mock 数据源
 - [ ] **T05: 指标计算** — 数据预处理 + 结构化摘要生成
 - [ ] **T06: AI 层** — LiteLLM 封装 + Prompt 组装 + JSON Schema 输出
 - [ ] **T07: 规则管理** — Prompt 模板加载 + CRUD + 示例规则
