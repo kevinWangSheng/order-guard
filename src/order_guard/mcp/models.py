@@ -22,6 +22,14 @@ class DBHubSecurityConfig(BaseModel):
     max_rows: int = 1000
 
 
+class SchemaFilterConfig(BaseModel):
+    """Configuration for filtering sensitive tables/columns from schema context."""
+
+    blocked_tables: list[str] = Field(default_factory=list)
+    blocked_columns: list[str] = Field(default_factory=list)
+    cold_tables: list[str] = Field(default_factory=list)  # Tables marked as archive/cold
+
+
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
@@ -37,6 +45,9 @@ class MCPServerConfig(BaseModel):
     # DBHub-specific fields
     databases: list[DBHubDatabaseConfig] = Field(default_factory=list)
     security: DBHubSecurityConfig = Field(default_factory=DBHubSecurityConfig)
+    # Schema anti-hallucination
+    schema_filter: SchemaFilterConfig = Field(default_factory=SchemaFilterConfig)
+    schema_sample_rows: int = 3      # Number of sample rows to include (0 = disabled)
 
 
 class ToolInfo(BaseModel):

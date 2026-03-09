@@ -302,3 +302,76 @@
 - T21: Schema 防幻觉
 - T22: 热冷数据 + 查询优化
 - T23: 查询审计
+
+## 2026-03-08 | Session 9: 生产数据库搭建 + 全量 Pipeline 验证
+
+### Completed
+- 安装配置 MySQL 8.0 和 PostgreSQL 14
+  - MySQL: orderguard_erp 数据库，og_readonly 只读用户
+  - PostgreSQL: orderguard_analytics 数据库，og_readonly 只读用户
+- 创建 MySQL ERP 数据库（12 张表 + 6 张跨境电商表）
+  - 基础表：products, inventory, orders, order_items, returns, return_items, purchase_orders, purchase_order_items, daily_sales_summary
+  - 跨境电商：fba_inventory, shipping_methods, replenishment_plans, logistics_shipments, listings, listing_performance
+  - 含真实异常数据：缺货 SKU、积压 SKU、高退货 SKU、物流延误、Listing 评分下降
+- 创建 PostgreSQL 分析库（星型模型 9 张表 + 5 张跨境分析表）
+  - 维度表：dim_date, dim_product, dim_channel, dim_region
+  - 事实表：fact_daily_sales, agg_weekly_kpi, agg_sku_monthly
+  - 跨境分析：fact_logistics_cost, fact_listing_performance
+- 扩展 rules.yaml 从 3 条规则到 13 条
+  - ERP 规则：缺货检测、积压检测、退货异常、物流成本异常、Listing 健康度、补货计划
+  - 分析库规则：销售趋势异常、利润率异常、物流成本趋势、Listing 评分趋势
+- 全量 Pipeline 飞书推送验证（13 条规则，全部 HTTP 200）
+  - 基础 MCP 规则 3 条 ✓
+  - ERP 数据库规则 6 条 ✓
+  - PG 分析库规则 4 条 ✓
+  - Agent 自动探索 schema → 多步 SQL → 异常检测 → 飞书卡片推送
+  - Alert 去重/静默机制正常工作
+
+### 生产数据库详情
+- MySQL ERP (localhost:3306/orderguard_erp): 18 张表，~50 SKU，完整跨境电商数据
+- PG Analytics (localhost:5432/orderguard_analytics): 14 张表，星型模型，跨平台跨渠道跨区域分析数据
+
+### Current Status
+- 20/25 任务完成（T01-T20）
+- 生产模拟数据库完整搭建
+- 13 条规则全部端到端验证通过
+
+### Next Steps
+- T21-T25 开发
+
+## 2026-03-08 | Session 10: T21-T25 全部完成
+
+### Completed
+- T21: Schema 防幻觉 ✓
+  - SchemaLoader 自动通过 MCP 工具发现表结构
+  - schema context 注入 Agent 系统提示（字段名、类型、注释、外键、索引、样例数据）
+  - SchemaFilterConfig 黑名单过滤（blocked_tables / blocked_columns）
+  - SQLGlot SQL 字段校验
+  - 26 个单元测试
+
+- T22: 热冷数据 + 查询优化 ✓
+  - data_window 时间窗口 + 自动时间约束注入
+  - 大表查询策略 + 冷数据 [ARCHIVE] 标记
+  - 14 个单元测试
+
+- T23: 查询审计 ✓
+  - QueryLog 模型 + Agent 自动记录
+  - CLI `queries` 命令
+  - 11 个单元测试
+
+- T24: 飞书 Bot 对话 ✓
+  - Event 回调 + @机器人 + 多轮对话 + 权限控制
+  - 20 个单元测试
+
+- T25: 清理传统数据流 ✓
+  - 删除 6 个 legacy 源文件 + 1 个 legacy 测试
+  - 重写 scheduler/jobs/setup, cli, main
+  - AlertRule 移除 connector_id / connector_type / data_type
+  - 163 个测试全部通过
+
+### Current Status
+- 25/25 全部任务完成（T01-T25）
+- v3 全部完成
+
+### Next Steps
+- v4: MCP 规范检测 + 多 Agent 协作 + Agent SDK 集成

@@ -28,14 +28,6 @@ async def lifespan(app: FastAPI):
     rule_manager = RuleManager()
     await rule_manager.sync_rules_to_db()
 
-    # Set up connectors
-    from order_guard.connectors.registry import ConnectorRegistry
-    connector_registry = ConnectorRegistry()
-    if settings.connectors:
-        connector_registry.register_from_config(
-            [c.model_dump() for c in settings.connectors]
-        )
-
     # Set up alert dispatcher
     from order_guard.alerts.dispatcher import AlertDispatcher
     dispatcher = AlertDispatcher(silence_minutes=settings.alerts.silence_minutes)
@@ -57,7 +49,6 @@ async def lifespan(app: FastAPI):
     from order_guard.scheduler.setup import create_scheduler
     analyzer = Analyzer()
     scheduler = await create_scheduler(
-        connector_registry=connector_registry,
         rule_manager=rule_manager,
         analyzer=analyzer,
         dispatcher=dispatcher,
@@ -65,11 +56,17 @@ async def lifespan(app: FastAPI):
 
     # Store components on app state for access in routes/CLI
     app.state.rule_manager = rule_manager
-    app.state.connector_registry = connector_registry
     app.state.dispatcher = dispatcher
     app.state.analyzer = analyzer
     app.state.mcp_manager = mcp_manager
     app.state.scheduler = scheduler
+
+    # Set up Feishu Bot
+    if settings.feishu_bot.enabled:
+        from order_guard.api.feishu import router as feishu_router, setup_feishu_bot
+        app.include_router(feishu_router)
+        setup_feishu_bot(app.state, settings.feishu_bot)
+        logger.info("Feishu Bot enabled")
 
     # Start scheduler
     if settings.scheduler.enabled:

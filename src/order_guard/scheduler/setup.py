@@ -9,14 +9,12 @@ from loguru import logger
 from order_guard.alerts.dispatcher import AlertDispatcher
 from order_guard.config import get_settings
 from order_guard.config.settings import SchedulerJobConfig
-from order_guard.connectors.registry import ConnectorRegistry
 from order_guard.engine.analyzer import Analyzer
 from order_guard.engine.rules import RuleManager
 from order_guard.scheduler.jobs import run_detection_job
 
 
 async def create_scheduler(
-    connector_registry: ConnectorRegistry,
     rule_manager: RuleManager,
     analyzer: Analyzer,
     dispatcher: AlertDispatcher,
@@ -33,7 +31,6 @@ async def create_scheduler(
         _register_job(
             scheduler,
             job_cfg,
-            connector_registry=connector_registry,
             rule_manager=rule_manager,
             analyzer=analyzer,
             dispatcher=dispatcher,
@@ -46,7 +43,6 @@ def _register_job(
     scheduler: AsyncScheduler,
     job_cfg: SchedulerJobConfig,
     *,
-    connector_registry: ConnectorRegistry,
     rule_manager: RuleManager,
     analyzer: Analyzer,
     dispatcher: AlertDispatcher,
@@ -67,7 +63,6 @@ def _register_job(
             kwargs={
                 "rule_id": rule_id,
                 "job_name": job_cfg.name,
-                "connector_registry": connector_registry,
                 "rule_manager": rule_manager,
                 "analyzer": analyzer,
                 "dispatcher": dispatcher,

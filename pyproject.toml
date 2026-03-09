@@ -22,6 +22,7 @@ dependencies = [
     "openpyxl>=3.1.0",
     "chardet>=5.2.0",
     "mcp>=1.0.0",
+    "sqlglot>=26.0.0",
 ]
 
 [project.scripts]

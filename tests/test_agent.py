@@ -102,7 +102,8 @@ class TestAgent:
             _make_text_response(FINAL_JSON),
         ])
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        config = AgentConfig(inject_schema=False)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=config)
         result = await agent.run("检查库存风险")
 
         assert result.has_alerts is True
@@ -142,7 +143,8 @@ class TestAgent:
             _make_text_response(FINAL_JSON),
         ])
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        config = AgentConfig(inject_schema=False)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=config)
         result = await agent.run("检查库存风险")
 
         assert result.has_alerts is True
@@ -182,7 +184,7 @@ class TestAgent:
             _make_text_response(FINAL_JSON),
         ])
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查数据")
 
         assert result.has_alerts is True
@@ -203,7 +205,7 @@ class TestAgent:
             _make_text_response(FINAL_JSON),  # 300 tokens
         ])
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查库存")
 
         assert result.token_usage.prompt_tokens == 200  # 100 + 100
@@ -217,7 +219,7 @@ class TestAgent:
         mock_llm = MagicMock()
         mock_llm.completion = AsyncMock(return_value=_make_text_response(FINAL_JSON))
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查库存")
 
         assert result.has_alerts is True
@@ -230,7 +232,7 @@ class TestAgent:
         mock_llm = MagicMock()
         mock_llm.completion = AsyncMock(return_value=_make_text_response("Not valid JSON"))
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查库存")
 
         # Should return with text as summary, not crash
@@ -245,7 +247,7 @@ class TestAgent:
         wrapped = f"```json\n{FINAL_JSON}\n```"
         mock_llm.completion = AsyncMock(return_value=_make_text_response(wrapped))
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查库存")
 
         assert result.has_alerts is True
@@ -269,7 +271,7 @@ class TestAgent:
             _make_text_response(FINAL_JSON),
         ])
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查库存")
 
         assert mock_mcp.call_tool.call_count == 2
@@ -282,7 +284,7 @@ class TestAgent:
         mock_llm = MagicMock()
         mock_llm.completion = AsyncMock(return_value=_make_text_response(FINAL_JSON))
 
-        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp)
+        agent = Agent(llm_client=mock_llm, mcp_connection=mock_mcp, config=AgentConfig(inject_schema=False))
         result = await agent.run("检查库存")
 
         # Verify AnalyzerOutput structure

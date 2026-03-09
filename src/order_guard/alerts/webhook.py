@@ -126,6 +126,70 @@ def _build_feishu_card_single(alert: AlertMessage) -> dict[str, Any]:
     return _build_feishu_card_batch([alert], alert.rule_name, alert.source)
 
 
+# ---------------------------------------------------------------------------
+# WeCom (企业微信) markdown builder
+# ---------------------------------------------------------------------------
+
+def _build_wecom_markdown_single(alert: AlertMessage) -> dict[str, Any]:
+    """Build a WeCom markdown message for a single alert."""
+    return _build_wecom_markdown_batch([alert], alert.rule_name, alert.source)
+
+
+def _build_wecom_markdown_batch(alerts: list[AlertMessage], rule_name: str = "", source: str = "") -> dict[str, Any]:
+    """Build a WeCom markdown message aggregating multiple alerts."""
+    # Count by severity
+    counts: dict[str, int] = {}
+    for a in alerts:
+        counts[a.severity] = counts.get(a.severity, 0) + 1
+
+    # Header line
+    header_parts = []
+    for sev in ["critical", "warning", "info"]:
+        if counts.get(sev, 0) > 0:
+            cfg = _SEVERITY_CONFIG[sev]
+            header_parts.append(f"{cfg['emoji']} {counts[sev]}个{cfg['label']}")
+
+    lines: list[str] = []
+    lines.append(f"# OrderGuard 告警通知")
+    lines.append(f"> {' | '.join(header_parts)}")
+    lines.append("")
+
+    # Group by severity
+    for sev in ["critical", "warning", "info"]:
+        sev_alerts = [a for a in alerts if a.severity == sev]
+        if not sev_alerts:
+            continue
+        cfg = _SEVERITY_CONFIG[sev]
+        lines.append(f"### {cfg['emoji']} {cfg['label']}")
+
+        for a in sev_alerts:
+            detail = a.details[0] if a.details else {}
+            sku = detail.get("sku", "")
+            title = f"**{sku}** | {a.title}" if sku else f"**{a.title}**"
+            lines.append(title)
+            if a.summary:
+                lines.append(f"> {a.summary}")
+            if a.suggestion:
+                lines.append(f"> <font color=\"warning\">建议: {a.suggestion}</font>")
+            lines.append("")
+
+    # Footer
+    now = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    footer_parts = [now]
+    if rule_name:
+        footer_parts.append(f"规则: {rule_name}")
+    if source:
+        footer_parts.append(f"数据源: {source}")
+    lines.append(f"---\n{' | '.join(footer_parts)}")
+
+    return {
+        "msgtype": "markdown",
+        "markdown": {
+            "content": "\n".join(lines),
+        },
+    }
+
+
 def _format_generic_payload(alert: AlertMessage) -> dict[str, Any]:
     """Format alert as generic JSON payload."""
     return {
@@ -165,11 +229,14 @@ class WebhookChannel(BaseAlertChannel):
         self._url = url
         self._max_retries = max_retries
         self._is_feishu = "feishu.cn" in url or "lark.cn" in url
+        self._is_wecom = "qyapi.weixin.qq.com" in url
 
     async def send(self, alert: AlertMessage) -> SendResult:
         """Send a single alert."""
         if self._is_feishu:
             payload = _build_feishu_card_single(alert)
+        elif self._is_wecom:
+            payload = _build_wecom_markdown_single(alert)
         else:
             payload = _format_generic_payload(alert)
         return await self._post(payload)
@@ -181,6 +248,8 @@ class WebhookChannel(BaseAlertChannel):
 
         if self._is_feishu:
             payload = _build_feishu_card_batch(alerts, rule_name, source)
+        elif self._is_wecom:
+            payload = _build_wecom_markdown_batch(alerts, rule_name, source)
         else:
             payload = _format_generic_batch_payload(alerts, rule_name, source)
         return await self._post(payload)

@@ -316,7 +316,7 @@
       "id": "T21",
       "name": "Schema 防幻觉",
       "layer": "生产数据源",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T17", "T20"],
       "spec": "specs/t21-schema-anti-hallucination/",
       "steps": [
@@ -333,7 +333,7 @@
       "id": "T22",
       "name": "热冷数据 + 查询优化",
       "layer": "生产数据源",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T21"],
       "spec": "specs/t22-hot-cold-data/",
       "steps": [
@@ -349,7 +349,7 @@
       "id": "T23",
       "name": "查询审计",
       "layer": "生产数据源",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T17", "T20"],
       "spec": "specs/t23-query-audit/",
       "steps": [
@@ -366,7 +366,7 @@
       "id": "T24",
       "name": "飞书 Bot 对话",
       "layer": "Bot 对话",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T12", "T20"],
       "spec": "specs/t24-feishu-bot/",
       "steps": [
@@ -385,7 +385,7 @@
       "id": "T25",
       "name": "清理传统数据流",
       "layer": "架构清理",
-      "passes": false,
+      "passes": true,
       "depends_on": ["T20", "T21", "T22", "T23", "T24"],
       "spec": "specs/t25-legacy-cleanup/",
       "steps": [

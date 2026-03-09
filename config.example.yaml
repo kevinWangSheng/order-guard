@@ -84,6 +84,13 @@ mcp_servers:
   #   security:
   #     readonly: true
   #     max_rows: 500
+  #   # Schema 防幻觉：过滤敏感表/字段，AI 看不到被过滤的内容
+  #   # Schema anti-hallucination: filter sensitive tables/columns from AI context
+  #   schema_filter:
+  #     blocked_tables: ["users", "admin_logs", "credentials", "sessions"]
+  #     blocked_columns: ["password", "id_card", "bank_account", "phone", "ssn"]
+  #     cold_tables: ["orders_archive_2024", "sales_history_2023"]  # 归档表标记 / Archive tables
+  #   schema_sample_rows: 3           # 样例数据行数，0 = 禁用 / Sample rows (0 = disabled)
   #   enabled: true
 
   # DBHub + PostgreSQL 示例 / DBHub + PostgreSQL example
@@ -119,6 +126,21 @@ mcp_servers:
   #     Authorization: "Bearer ${ERP_API_KEY}"
   #   enabled: true
 
+# 飞书 Bot 配置 / Feishu Bot settings
+feishu_bot:
+  enabled: false                     # 启用飞书 Bot / Enable Feishu Bot
+  app_id: "${FEISHU_APP_ID}"         # 飞书应用 App ID
+  app_secret: "${FEISHU_APP_SECRET}" # 飞书应用 App Secret
+  verification_token: "${FEISHU_VERIFICATION_TOKEN}"
+  max_turns: 10                      # 最多保留对话轮数 / Max conversation turns
+  context_ttl_minutes: 30            # 对话上下文过期时间 / Context TTL (minutes)
+  # 权限配置 / Permission settings
+  permissions:
+    - user_ids: ["*"]                # 所有人 / All users
+      mcp_servers: ["test-warehouse"]
+    # - user_ids: ["u_admin1"]       # 管理员 / Admin users
+    #   mcp_servers: ["production-erp", "analytics-db"]
+
 # 定时任务配置 / Scheduler settings
 scheduler:
   enabled: true                    # 是否启用调度器 / Enable scheduler
@@ -127,3 +149,16 @@ scheduler:
       cron: "0 9 * * *"           # Cron 表达式 / Cron expression (每天9点)
       rule_ids: ["rule-001"]       # 关联规则 ID / Associated rule IDs
       connector: "mock"            # 数据源 / Data source connector
+
+# 规则配置示例（在 rules.yaml 中）/ Rule config example (in rules.yaml):
+# rules:
+#   - id: "rule-inventory-check"
+#     mcp_server: "production-erp"
+#     data_window: "7d"            # 时间窗口：只查最近 7 天 / Time window: last 7 days
+#     prompt: |
+#       检查库存情况...
+#   - id: "rule-trend-analysis"
+#     mcp_server: "analytics-db"
+#     data_window: "90d"           # 趋势分析查 90 天 / Trend analysis: 90 days
+#     prompt: |
+#       分析销售趋势...

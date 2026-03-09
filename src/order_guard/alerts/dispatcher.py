@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
+from sqlalchemy import select, and_
 
 from order_guard.alerts.base import AlertMessage, BaseAlertChannel, SendResult
 from order_guard.alerts.webhook import WebhookChannel
@@ -16,11 +18,18 @@ from order_guard.storage.database import get_session
 from order_guard.storage.crud import create, update, get_by_id
 
 
+def _alert_fingerprint(rule_id: str, severity: str, title: str) -> str:
+    """Generate a dedup fingerprint for an alert."""
+    raw = f"{rule_id}|{severity}|{title}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 class AlertDispatcher:
     """Dispatch alerts to multiple channels and record results in DB."""
 
-    def __init__(self):
+    def __init__(self, silence_minutes: int = 30):
         self._channels: list[BaseAlertChannel] = []
+        self._silence_minutes = silence_minutes
 
     def register_from_config(self, channels_config: list[AlertChannelConfig]) -> None:
         for cfg in channels_config:
@@ -47,11 +56,16 @@ class AlertDispatcher:
             logger.info("No alerts to dispatch")
             return []
 
-        # 1. Save all alerts to DB + build messages
+        # 1. Save all alerts to DB + build messages (apply silence/dedup)
         messages: list[AlertMessage] = []
         db_alert_ids: list[str] = []
 
         for alert_item in analyzer_output.alerts:
+            # Check silence window
+            silenced = False
+            if self._silence_minutes > 0:
+                silenced = await self._is_silenced(rule_name, alert_item)
+
             msg = AlertMessage(
                 severity=alert_item.severity,
                 title=alert_item.title,
@@ -61,10 +75,19 @@ class AlertDispatcher:
                 rule_name=rule_name,
                 source=source,
             )
-            messages.append(msg)
 
-            db_alert = await self._save_alert(alert_item, rule_name)
-            db_alert_ids.append(db_alert.id if db_alert else "")
+            if silenced:
+                # Save to DB as silenced, but don't push
+                db_alert = await self._save_alert(alert_item, rule_name, status="silenced")
+                logger.info("Alert silenced (dedup): {} [{}]", alert_item.title, rule_name)
+            else:
+                messages.append(msg)
+                db_alert = await self._save_alert(alert_item, rule_name)
+                db_alert_ids.append(db_alert.id if db_alert else "")
+
+        if not messages:
+            logger.info("All alerts silenced for rule: {}", rule_name)
+            return [SendResult(success=True, channel_name="silenced", attempts=0)]
 
         # 2. Dry run — log and return
         if dry_run:
@@ -85,7 +108,32 @@ class AlertDispatcher:
 
         return results
 
-    async def _save_alert(self, item: AlertItem, rule_id: str) -> Alert | None:
+    async def _is_silenced(self, rule_id: str, item: AlertItem) -> bool:
+        """Check if a similar alert was sent recently within the silence window."""
+        fingerprint = _alert_fingerprint(rule_id, item.severity, item.title)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=self._silence_minutes)
+        try:
+            async with get_session() as session:
+                stmt = (
+                    select(Alert)
+                    .where(
+                        and_(
+                            Alert.rule_id == rule_id,
+                            Alert.severity == item.severity,
+                            Alert.title == item.title,
+                            Alert.status.in_(["sent", "pending"]),
+                            Alert.created_at >= cutoff,
+                        )
+                    )
+                    .limit(1)
+                )
+                result = await session.execute(stmt)
+                return result.scalars().first() is not None
+        except Exception as e:
+            logger.error("Failed to check silence window: {}", e)
+            return False  # On error, don't silence
+
+    async def _save_alert(self, item: AlertItem, rule_id: str, status: str = "pending") -> Alert | None:
         try:
             async with get_session() as session:
                 alert = Alert(
@@ -94,7 +142,7 @@ class AlertDispatcher:
                     title=item.title,
                     summary=item.reason,
                     details=item.model_dump(),
-                    status="pending",
+                    status=status,
                 )
                 return await create(session, alert)
         except Exception as e:

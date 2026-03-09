@@ -46,10 +46,8 @@ class AlertRule(SQLModel, table=True):
     name: str = ""
     description: str = ""
     prompt_template: str = ""
-    connector_id: str = ""
-    connector_type: str = Field(default="legacy")  # "legacy" | "mcp"
-    mcp_server: str = Field(default="")             # MCP Server name (when connector_type=mcp)
-    data_type: str = Field(default="")              # Data type for legacy connectors
+    mcp_server: str = Field(default="")             # MCP Server name
+    data_window: str = Field(default="")            # Time window, e.g. "7d", "30d", "90d"
     enabled: bool = True
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -71,6 +69,25 @@ class TaskRun(SQLModel, table=True):
     duration_ms: int | None = None
     error: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
+# ---------------------------------------------------------------------------
+# query_logs
+# ---------------------------------------------------------------------------
+
+class QueryLog(SQLModel, table=True):
+    __tablename__ = "query_logs"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    rule_id: str = Field(default="", index=True)
+    mcp_server: str = ""
+    sql: str = ""
+    status: str = Field(default="success")  # success / error / timeout / rejected
+    rows_returned: int = 0
+    duration_ms: int = 0
+    error: str | None = None
+    agent_iteration: int = 0
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---------------------------------------------------------------------------

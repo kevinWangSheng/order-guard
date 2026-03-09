@@ -1,4 +1,4 @@
-"""Integration tests for MCP pipeline (T18)."""
+"""Integration tests for MCP pipeline (T18, updated T25)."""
 
 from __future__ import annotations
 
@@ -13,39 +13,37 @@ from order_guard.models.tables import AlertRule
 
 
 # ---------------------------------------------------------------------------
-# AlertRule model tests
+# AlertRule model tests (post-T25: legacy fields removed)
 # ---------------------------------------------------------------------------
 
 class TestAlertRuleModel:
-    def test_default_connector_type(self):
-        """New rules default to legacy connector type."""
+    def test_default_fields(self):
+        """New rules have correct defaults."""
         rule = AlertRule(id="test-rule")
-        assert rule.connector_type == "legacy"
         assert rule.mcp_server == ""
-        assert rule.data_type == ""
+        assert rule.data_window == ""
+        assert rule.enabled is True
 
     def test_mcp_rule(self):
         """MCP rule has correct fields."""
         rule = AlertRule(
             id="rule-mcp-test",
             name="MCP Test",
-            connector_type="mcp",
             mcp_server="test-warehouse",
             prompt_template="检查库存",
         )
-        assert rule.connector_type == "mcp"
         assert rule.mcp_server == "test-warehouse"
+        assert rule.name == "MCP Test"
 
-    def test_legacy_rule_backward_compatible(self):
-        """Legacy rules still work without new fields."""
+    def test_rule_with_data_window(self):
+        """Rule with data_window field."""
         rule = AlertRule(
-            id="rule-legacy",
-            name="Legacy Rule",
-            connector_id="mock",
-            prompt_template="检查库存",
+            id="rule-window",
+            name="Window Rule",
+            mcp_server="db",
+            data_window="30d",
         )
-        assert rule.connector_type == "legacy"
-        assert rule.connector_id == "mock"
+        assert rule.data_window == "30d"
 
 
 # ---------------------------------------------------------------------------
@@ -68,16 +66,9 @@ class TestPipelineBranch:
 
         rule = AlertRule(
             id="rule-mcp",
-            connector_type="mcp",
             mcp_server="test-db",
             prompt_template="检查库存",
         )
-
-        final_json = json.dumps({
-            "alerts": [{"sku": "SKU-001", "severity": "warning", "title": "Test", "reason": "R", "suggestion": "S"}],
-            "summary": "Test summary",
-            "has_alerts": True,
-        })
 
         with patch("order_guard.engine.agent.Agent.run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = AnalyzerOutput(
@@ -87,7 +78,7 @@ class TestPipelineBranch:
                 token_usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
             )
 
-            result = await _run_mcp_pipeline(rule, mock_mcp_manager, MagicMock())
+            result = await _run_mcp_pipeline(rule, mock_mcp_manager)
 
         assert result.has_alerts is True
         assert result.alerts[0].sku == "SKU-001"
@@ -98,72 +89,28 @@ class TestPipelineBranch:
         """MCP pipeline raises if mcp_manager is None."""
         from order_guard.scheduler.jobs import _run_mcp_pipeline
 
-        rule = AlertRule(id="rule-mcp", connector_type="mcp", mcp_server="db")
+        rule = AlertRule(id="rule-mcp", mcp_server="db")
         with pytest.raises(ValueError, match="MCP manager not configured"):
-            await _run_mcp_pipeline(rule, None, MagicMock())
+            await _run_mcp_pipeline(rule, None)
 
     @pytest.mark.asyncio
-    async def test_legacy_pipeline_branch(self):
-        """Legacy rules go through Connector flow."""
-        from order_guard.scheduler.jobs import _run_legacy_pipeline
-
-        mock_connector = AsyncMock()
-        mock_connector.query = AsyncMock(return_value=[
-            {"sku": "SKU-001", "product_name": "Test", "stock": 100, "daily_avg_sales": 10, "lead_time_days": 14},
-        ])
-
-        mock_registry = MagicMock()
-        mock_registry.get.return_value = mock_connector
-
-        mock_analyzer = AsyncMock()
-        mock_analyzer.analyze = AsyncMock(return_value=AnalyzerOutput(
-            summary="All normal",
-            has_alerts=False,
-        ))
-
-        rule = AlertRule(
-            id="rule-legacy",
-            connector_type="legacy",
-            connector_id="mock",
-            data_type="inventory",
-            prompt_template="检查库存风险",
-        )
-
-        result = await _run_legacy_pipeline(rule, mock_registry, mock_analyzer)
-        assert result.has_alerts is False
-        mock_registry.get.assert_called_once_with("mock")
-
-    @pytest.mark.asyncio
-    async def test_output_format_consistent(self):
-        """Both MCP and legacy pipelines produce AnalyzerOutput."""
-        from order_guard.scheduler.jobs import _run_mcp_pipeline, _run_legacy_pipeline
-
-        # MCP output
-        mcp_output = AnalyzerOutput(
+    async def test_output_format(self):
+        """MCP pipeline produces AnalyzerOutput with expected structure."""
+        output = AnalyzerOutput(
             alerts=[AlertItem(sku="SKU-001", severity="critical", title="T", reason="R", suggestion="S")],
             summary="MCP analysis",
             has_alerts=True,
             token_usage=TokenUsage(total_tokens=100),
         )
 
-        # Legacy output
-        legacy_output = AnalyzerOutput(
-            alerts=[AlertItem(sku="SKU-002", severity="warning", title="T2", reason="R2", suggestion="S2")],
-            summary="Legacy analysis",
-            has_alerts=True,
-            token_usage=TokenUsage(total_tokens=50),
-        )
-
-        # Both should have identical structure
-        for output in [mcp_output, legacy_output]:
-            assert hasattr(output, "alerts")
-            assert hasattr(output, "summary")
-            assert hasattr(output, "has_alerts")
-            assert hasattr(output, "token_usage")
-            assert isinstance(output.alerts, list)
-            for alert in output.alerts:
-                assert hasattr(alert, "sku")
-                assert hasattr(alert, "severity")
-                assert hasattr(alert, "title")
-                assert hasattr(alert, "reason")
-                assert hasattr(alert, "suggestion")
+        assert hasattr(output, "alerts")
+        assert hasattr(output, "summary")
+        assert hasattr(output, "has_alerts")
+        assert hasattr(output, "token_usage")
+        assert isinstance(output.alerts, list)
+        for alert in output.alerts:
+            assert hasattr(alert, "sku")
+            assert hasattr(alert, "severity")
+            assert hasattr(alert, "title")
+            assert hasattr(alert, "reason")
+            assert hasattr(alert, "suggestion")

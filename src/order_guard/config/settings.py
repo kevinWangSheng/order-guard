@@ -73,6 +73,12 @@ class MCPDBHubSecurityConfig(BaseModel):
     max_rows: int = 1000
 
 
+class MCPSchemaFilterConfig(BaseModel):
+    blocked_tables: list[str] = Field(default_factory=list)
+    blocked_columns: list[str] = Field(default_factory=list)
+    cold_tables: list[str] = Field(default_factory=list)  # Archive/cold tables
+
+
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
@@ -88,6 +94,25 @@ class MCPServerConfig(BaseModel):
     # DBHub-specific fields
     databases: list[MCPDBHubDatabaseConfig] = Field(default_factory=list)
     security: MCPDBHubSecurityConfig = Field(default_factory=MCPDBHubSecurityConfig)
+    # Schema anti-hallucination
+    schema_filter: MCPSchemaFilterConfig = Field(default_factory=MCPSchemaFilterConfig)
+    schema_sample_rows: int = 3      # Number of sample rows to include (0 = disabled)
+
+
+class FeishuBotPermission(BaseModel):
+    user_ids: list[str] = Field(default_factory=list)  # ["*"] = all users
+    mcp_servers: list[str] = Field(default_factory=list)
+
+
+class FeishuBotConfig(BaseModel):
+    enabled: bool = False
+    app_id: str = ""
+    app_secret: SecretStr = SecretStr("")
+    verification_token: str = ""
+    encrypt_key: str = ""
+    max_turns: int = 10              # Max conversation turns to keep
+    context_ttl_minutes: int = 30    # Conversation context TTL
+    permissions: list[FeishuBotPermission] = Field(default_factory=list)
 
 
 class SchedulerConfig(BaseModel):
@@ -134,6 +159,7 @@ class Settings(BaseSettings):
     connectors: list[ConnectorConfig] = Field(default_factory=list)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
+    feishu_bot: FeishuBotConfig = Field(default_factory=FeishuBotConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
 
     @model_validator(mode="before")

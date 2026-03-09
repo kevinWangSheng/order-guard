@@ -5,7 +5,7 @@ rules:
   - id: "rule-inventory-risk"
     name: "库存风险检查"
     description: "检查 SKU 是否存在缺货或积压风险"
-    connector: "mock"
+    connector: "csv-erp"
     data_type: "inventory"
     prompt: |
       你是一个库存分析专家。请根据以下库存数据判断每个 SKU 的补货风险：
@@ -22,7 +22,7 @@ rules:
   - id: "rule-return-rate"
     name: "退货率异常检查"
     description: "检测退货率异常偏高的 SKU"
-    connector: "mock"
+    connector: "csv-erp"
     data_type: "orders"
     prompt: |
       你是一个电商运营分析专家。请分析以下订单数据中退货率异常的 SKU：
@@ -33,4 +33,224 @@ rules:
       - 退货率 > 3% 标记为 info
 
       请分析可能的退货原因并给出改善建议。
+    enabled: true
+
+  - id: "rule-mcp-inventory"
+    name: "仓库库存智能检查（MCP）"
+    description: "通过 MCP Agent 自动探索数据库并分析库存风险"
+    connector_type: "mcp"
+    mcp_server: "test-warehouse"
+    prompt: |
+      请检查仓库数据库中的库存状况：
+      1. 查看有哪些商品及其库存数量
+      2. 结合近期销售数据，计算每个 SKU 的库存可售天数
+      3. 与安全库存（reorder_point）对比，判断是否需要补货
+      4. 找出积压商品（库存可售天数 > 90 天）
+      5. 检查退货率异常的 SKU（从 orders 表中分析）
+
+      对每个异常 SKU 输出 severity（critical/warning/info）、原因和建议。
+    enabled: true
+
+  # ──────────────────────────────────────────────
+  # MySQL ERP 数据库规则（通过 DBHub 连接）
+  # ──────────────────────────────────────────────
+
+  - id: "rule-erp-stockout"
+    name: "ERP 库存缺货检测"
+    description: "基于 MySQL ERP 数据库检测缺货风险（DBHub）"
+    connector_type: "mcp"
+    mcp_server: "mysql-erp"
+    prompt: |
+      请分析 ERP 数据库中的库存和销售数据，找出缺货风险：
+      1. 先探索数据库有哪些表，了解表结构
+      2. 查询 inventory 表中库存量低于 reorder_point 的 SKU
+      3. 结合 daily_sales_summary 近 7 天的销售数据，计算库存可售天数
+      4. 与 lead_time_days（补货周期）对比：可售天数 < 补货周期 → critical
+      5. 检查是否有采购单在途（purchase_orders 表 status='shipped'）
+      6. 查看 products 表获取商品名称
+
+      重点关注：库存数量极低（<10）但日销量较高的 SKU。
+      对每个异常 SKU 输出 severity、原因和补货建议。
+    enabled: true
+
+  - id: "rule-erp-overstock"
+    name: "ERP 库存积压检测"
+    description: "检测库存积压和周转异常"
+    connector_type: "mcp"
+    mcp_server: "mysql-erp"
+    prompt: |
+      请分析 ERP 数据库，找出库存积压问题：
+      1. 探索数据库结构（tables, columns）
+      2. 查询 inventory 中库存量远超 reorder_point 的 SKU（比如 > 5 倍）
+      3. 结合 daily_sales_summary 近 30 天销售数据计算周转天数
+      4. 周转天数 > 90 天 → warning（积压）
+      5. 周转天数 > 180 天 → critical（严重积压）
+      6. 按仓库分析，看哪个仓库整体效率最差
+
+      输出积压 SKU 列表，附带商品名、库存量、月销量、周转天数。
+    enabled: true
+
+  - id: "rule-erp-returns"
+    name: "ERP 退货异常检测"
+    description: "检测退货率异常偏高的商品"
+    connector_type: "mcp"
+    mcp_server: "mysql-erp"
+    prompt: |
+      请分析 ERP 数据库中的退货情况：
+      1. 探索表结构，找到退货相关的表
+      2. 统计每个 SKU 的退货数量和退货率（退货数 / 总销量）
+      3. 分析退货原因分布（quality issue / wrong size / etc.）
+      4. 退货率 > 15% → critical，> 8% → warning
+      5. 对比不同渠道的退货率差异
+
+      重点关注：退货原因集中在"质量问题"的 SKU。
+    enabled: true
+
+  # ──────────────────────────────────────────────
+  # PostgreSQL 分析数据库规则（通过 DBHub 连接）
+  # ──────────────────────────────────────────────
+
+  - id: "rule-analytics-sales-trend"
+    name: "销售趋势异常检测"
+    description: "基于 PG 分析库检测销售趋势异常"
+    connector_type: "mcp"
+    mcp_server: "pg-analytics"
+    prompt: |
+      请分析分析数据库中的销售趋势：
+      1. 探索数据库结构（维度表 dim_* 和事实表 fact_*）
+      2. 从 fact_daily_sales 分析最近 7 天 vs 前 7 天的销量变化
+      3. 销量暴增（>200%）或暴跌（<50%）的 SKU 标记为异常
+      4. 按渠道(channel)分析，看哪个渠道波动最大
+      5. 按地区(region)分析，看是否有区域性异常
+      6. 从 agg_weekly_kpi 看整体趋势
+
+      重点：找出销量突变的商品/渠道/地区组合，分析可能原因。
+    enabled: true
+
+  - id: "rule-analytics-profitability"
+    name: "利润率异常检测"
+    description: "检测毛利率异常的商品和渠道"
+    connector_type: "mcp"
+    mcp_server: "pg-analytics"
+    prompt: |
+      请分析分析数据库中的利润情况：
+      1. 探索 dim_product 和 fact_daily_sales 表结构
+      2. 计算每个 SKU 近 30 天的毛利率：(revenue - cost) / revenue
+      3. 对比上月毛利率，找出大幅下降的 SKU
+      4. 毛利率 < 0（亏损）→ critical
+      5. 毛利率下降 > 20 个百分点 → warning
+      6. 从 agg_sku_monthly 验证月度趋势
+
+      重点关注：从盈利转为亏损的商品，分析是成本上涨还是价格下降。
+    enabled: true
+
+  # ──────────────────────────────────────────────
+  # 跨境电商专用规则
+  # ──────────────────────────────────────────────
+
+  - id: "rule-erp-logistics-cost"
+    name: "物流成本异常检测"
+    description: "检测海运/空运成本波动和物流延误"
+    connector_type: "mcp"
+    mcp_server: "mysql-erp"
+    prompt: |
+      请分析 ERP 数据库中的物流成本和时效数据：
+      1. 先 SHOW TABLES 找到物流相关的表，DESCRIBE 了解字段
+      2. 对比近 30 天 vs 前 30 天各物流方式（海运/空运/快递）的平均成本
+      3. 成本上涨 > 20% → warning，> 35% → critical
+      4. 检查物流延误情况：actual_arrival 超过 estimated_arrival 的比例
+      5. 延误率 > 30% 的物流方式标记为 warning
+      6. 计算各 SKU 的物流成本占商品售价的比例，超过 30% 的标记异常
+
+      业务规则说明：
+      - 海运普船正常周期 30-40 天，超过 50 天算延误
+      - 空运正常 7-12 天，超过 15 天算延误
+      - 空运成本正常 $28/kg，超过 $38/kg 需要告警
+      - 建议根据成本变化调整物流方式（贵了换海运，急了换空运）
+    enabled: true
+
+  - id: "rule-erp-listing-health"
+    name: "Listing 健康度检测"
+    description: "检测 Review 评分下降、转化率异常、广告效率问题"
+    connector_type: "mcp"
+    mcp_server: "mysql-erp"
+    prompt: |
+      请分析 ERP 数据库中的 Listing 表现数据：
+      1. 先 SHOW TABLES，找到 listings 和 listing_performance 表，DESCRIBE 了解字段
+      2. 检查 review_rating：近 7 天均值 vs 近 30 天均值，下降 > 0.5 分 → warning，> 1 分 → critical
+      3. 检查转化率(conversion_rate)：近 7 天 vs 前 7 天，下降 > 30% → warning
+      4. 检查 BSR 排名变化：排名数值变大(排名下降) > 100% → warning
+      5. 检查广告效率：ACoS > 40% → warning，> 60% → critical（广告亏损）
+      6. 检查 Buy Box 占比：< 80% → warning
+
+      业务规则：
+      - 评分低于 3.8 的 Listing 会被亚马逊降权，需要紧急处理
+      - 转化率突降通常和差评、价格变化、竞争对手有关
+      - ACoS 超过毛利率意味着广告亏钱
+      - Buy Box 丢失直接影响销量，需要检查价格竞争力
+    enabled: true
+
+  - id: "rule-erp-replenishment"
+    name: "补货计划检测"
+    description: "综合库存、销量、FBA库存、物流周期检测补货需求"
+    connector_type: "mcp"
+    mcp_server: "mysql-erp"
+    prompt: |
+      请综合分析 ERP 数据库，生成补货建议：
+      1. 先探索数据库所有表结构
+      2. 查看 fba_inventory 表中 FBA 可售库存和可售天数
+      3. 结合 daily_sales_summary 近 14 天日均销量计算实际可售天数
+      4. 查看 shipping_methods 表了解各物流方式的运输周期和成本
+      5. 查看 replenishment_plans 表了解已有补货计划
+      6. 综合判断：
+         - FBA 可售天数 < 海运周期(30天) 且无在途补货 → critical（必须空运）
+         - FBA 可售天数 < 空运周期(10天) → critical（紧急快递）
+         - FBA 可售天数 < 45天 且无补货计划 → warning（需启动海运补货）
+         - 已有补货计划但预计到货晚于断货日 → warning
+
+      业务规则：
+      - 选择物流方式的原则：时间充裕选海运（便宜），紧急选空运，极紧急选快递
+      - 补货数量 = 日均销量 × (运输天数 + 安全天数30天)
+      - 考虑季节性因素（如果近期销量增长，需要多备货）
+    enabled: true
+
+  - id: "rule-analytics-logistics-trend"
+    name: "物流成本趋势分析"
+    description: "基于分析库检测物流成本长期趋势"
+    connector_type: "mcp"
+    mcp_server: "pg-analytics"
+    prompt: |
+      请分析分析数据库中的物流成本趋势：
+      1. 先探索数据库所有表，特别是物流和成本相关的表
+      2. 按月分析各物流方式的平均成本变化趋势
+      3. 找出成本持续上涨的物流方式
+      4. 分析延误率趋势
+      5. 对比不同路线（美西/欧洲/日本）的性价比变化
+      6. 计算各 SKU 的"物流成本 / 商品售价"比率
+
+      业务建议角度：
+      - 成本连续 3 个月上涨 → warning，需要考虑更换物流商或调整定价
+      - 延误率 > 20% → warning，影响库存补货计划可靠性
+      - 物流成本占比 > 25% 的商品建议优化包装减重或换运输方式
+    enabled: true
+
+  - id: "rule-analytics-listing-review"
+    name: "Listing 评分趋势分析"
+    description: "分析评分和排名的长期趋势"
+    connector_type: "mcp"
+    mcp_server: "pg-analytics"
+    prompt: |
+      请分析分析数据库中 Listing 表现的长期趋势：
+      1. 探索数据库表结构，找到 listing 表现相关的事实表
+      2. 按品牌维度分析评分(review_rating)变化趋势
+      3. 找出评分持续下降的品牌或 SKU
+      4. 分析转化率(conversion_rate)与评分的相关性
+      5. 对比不同平台(amazon_us, amazon_eu)的表现差异
+      6. 找出 BSR 排名恶化但广告花费增加的 SKU（花钱没效果）
+
+      业务规则：
+      - 评分连续 2 周下降 → 需要排查产品质量和客服问题
+      - 转化率随评分下降通常滞后 1-2 周
+      - BSR 排名下降 + ACoS 上升 = 竞争力下降信号
+      - 同 SKU 不同平台表现差异大 → 需要分平台优化策略
     enabled: true
