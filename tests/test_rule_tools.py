@@ -142,7 +142,8 @@ class TestToolDefinitions:
 
     def test_create_rule_required_fields(self):
         schema = next(t for t in TOOL_DEFINITIONS if t.name == "create_rule")
-        assert set(schema.input_schema["required"]) == {"name", "mcp_server", "prompt_template", "schedule"}
+        # No top-level required — single fields or rules array both accepted
+        assert schema.input_schema["required"] == []
 
     def test_update_rule_required_fields(self):
         schema = next(t for t in TOOL_DEFINITIONS if t.name == "update_rule")
@@ -292,7 +293,6 @@ class TestCreateRule:
             )
             assert "error" in result
             assert "不存在" in result["error"]
-            assert "erp-mysql" in result["hint"]
         finally:
             configure(data_access_layer=None)
 

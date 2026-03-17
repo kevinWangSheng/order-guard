@@ -79,41 +79,56 @@ TOOL_LIST_RULES = ToolInfo(
     server_name="rule_tools",
 )
 
+_RULE_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "规则名称，如 '库存低于安全线检查'",
+        },
+        "mcp_server": {
+            "type": "string",
+            "description": "数据源 ID，从 list_datasources 获取",
+        },
+        "prompt_template": {
+            "type": "string",
+            "description": "分析 prompt 模板，包含具体的 SQL 查询逻辑和分析要求",
+        },
+        "schedule": {
+            "type": "string",
+            "description": "cron 表达式，如 '0 9 * * *'（每天9点）、'0 */2 * * *'（每2小时）",
+        },
+        "data_window": {
+            "type": "string",
+            "description": "数据时间窗口，如 '7d'、'24h'、'30d'。默认 '7d'",
+        },
+        "enabled": {
+            "type": "boolean",
+            "description": "是否立即启用。默认 true",
+        },
+    },
+    "required": ["name", "mcp_server", "prompt_template", "schedule"],
+}
+
 TOOL_CREATE_RULE = ToolInfo(
     name="create_rule",
     description=(
-        "创建一条新的监控规则。需要提供规则名称、数据源、分析 prompt、cron 调度表达式。"
+        "创建监控规则。支持单条或批量创建。"
+        "单条创建：直接传 name/mcp_server/prompt_template/schedule 等字段。"
+        "批量创建：传 rules 数组，每个元素包含上述字段，一次调用创建全部。"
         "创建前请先用 list_datasources 和 get_schema 了解可用的数据源和表结构。"
     ),
     input_schema={
         "type": "object",
         "properties": {
-            "name": {
-                "type": "string",
-                "description": "规则名称，如 '库存低于安全线检查'",
-            },
-            "mcp_server": {
-                "type": "string",
-                "description": "数据源 ID，从 list_datasources 获取",
-            },
-            "prompt_template": {
-                "type": "string",
-                "description": "分析 prompt 模板，包含具体的 SQL 查询逻辑和分析要求",
-            },
-            "schedule": {
-                "type": "string",
-                "description": "cron 表达式，如 '0 9 * * *'（每天9点）、'0 */2 * * *'（每2小时）",
-            },
-            "data_window": {
-                "type": "string",
-                "description": "数据时间窗口，如 '7d'、'24h'、'30d'。默认 '7d'",
-            },
-            "enabled": {
-                "type": "boolean",
-                "description": "是否立即启用。默认 true",
+            **_RULE_ITEM_SCHEMA["properties"],
+            "rules": {
+                "type": "array",
+                "description": "批量创建时传入规则列表。与单条参数互斥，优先使用 rules。",
+                "items": _RULE_ITEM_SCHEMA,
             },
         },
-        "required": ["name", "mcp_server", "prompt_template", "schedule"],
+        "required": [],
     },
     server_name="rule_tools",
 )
@@ -398,86 +413,89 @@ async def list_rules(**kwargs: Any) -> dict:
 
 
 async def create_rule(**kwargs: Any) -> dict:
-    """创建一条新的监控规则。"""
-    name = kwargs.get("name", "").strip()
-    mcp_server = kwargs.get("mcp_server", "").strip()
-    prompt_template = kwargs.get("prompt_template", "").strip()
-    schedule = kwargs.get("schedule", "").strip()
-    data_window = kwargs.get("data_window", "7d").strip()
-    enabled = kwargs.get("enabled", True)
+    """创建监控规则，支持单条或批量（传 rules 数组）。"""
+    # Determine single vs batch mode
+    rules_input = kwargs.get("rules")
+    if rules_input is not None:
+        # Batch mode
+        return await _create_rules_batch(rules_input)
+    else:
+        # Single mode — wrap as single-item batch
+        return await _create_rules_batch([kwargs])
 
-    # Validation
-    if not name:
-        return {
-            "error": "name 不能为空。",
-            "hint": "请提供规则名称，如 '库存低于安全线检查'。",
-        }
-    if not mcp_server:
-        return {
-            "error": "mcp_server 不能为空。",
-            "hint": "请提供数据源 ID。使用 list_datasources 查看可用数据源。",
-        }
-    if not prompt_template:
-        return {
-            "error": "prompt_template 不能为空。",
-            "hint": "请提供分析 prompt，描述需要检查的数据和条件。",
-        }
-    if not schedule:
-        return {
-            "error": "schedule 不能为空。",
-            "hint": "请提供 cron 表达式。示例：'0 9 * * *' 表示每天9点。",
-        }
 
-    # Validate cron expression
-    if not croniter.is_valid(schedule):
-        return {
-            "error": f"schedule '{schedule}' 不是合法的 cron 表达式。",
-            "hint": "cron 表达式需要 5 个字段：分 时 日 月 周。示例：'0 9 * * *' 表示每天9点，'0 */2 * * *' 表示每2小时。",
-        }
+async def _create_rules_batch(rules_input: list[dict[str, Any]]) -> dict:
+    """Internal: create one or more rules."""
+    if not rules_input:
+        return {"error": "请提供至少一条规则。", "hint": "需要 name/mcp_server/prompt_template/schedule。"}
 
-    # Validate mcp_server exists in DAL
-    if _data_access_layer is not None:
-        available = _data_access_layer.list_datasource_ids()
-        if mcp_server not in available:
-            return {
-                "error": f"数据源 '{mcp_server}' 不存在。",
-                "hint": f"可用的数据源：{available}。请使用 list_datasources 查看完整列表。",
-            }
-
-    # Check name uniqueness
+    # Pre-load existing names for uniqueness check
+    existing_names: set[str] = set()
     try:
         async with get_session() as session:
             existing = await list_all(session, AlertRule, limit=500)
-            if any(r.name == name for r in existing):
-                return {
-                    "error": f"规则名称 '{name}' 已存在。",
-                    "hint": "请使用不同的名称，或使用 list_rules 查看已有规则。",
-                }
+            existing_names = {r.name for r in existing}
     except Exception as e:
-        logger.warning("Name uniqueness check failed: {}", e)
+        logger.warning("Name uniqueness pre-check failed: {}", e)
 
-    # Create rule
-    try:
-        rule_id = f"chat-{uuid.uuid4().hex[:8]}"
-        async with get_session() as session:
-            rule = AlertRule(
-                id=rule_id,
-                name=name,
-                mcp_server=mcp_server,
-                prompt_template=prompt_template,
-                schedule=schedule,
-                data_window=data_window,
-                source="chat",
-                enabled=enabled,
-            )
-            rule = await create(session, rule)
+    # Pre-load available datasources
+    available_ds: list[str] | None = None
+    if _data_access_layer is not None:
+        available_ds = _data_access_layer.list_datasource_ids()
 
-        # Dynamic scheduler registration
-        if enabled and _scheduler is not None:
-            _register_rule_schedule(rule_id, schedule)
+    created: list[dict] = []
+    failed: list[dict] = []
 
-        return {
-            "data": {
+    for idx, rule_input in enumerate(rules_input):
+        name = (rule_input.get("name") or "").strip()
+        mcp_server = (rule_input.get("mcp_server") or "").strip()
+        prompt_template = (rule_input.get("prompt_template") or "").strip()
+        schedule = (rule_input.get("schedule") or "").strip()
+        data_window = (rule_input.get("data_window") or "7d").strip()
+        enabled = rule_input.get("enabled", True)
+
+        # Validate
+        error = None
+        if not name:
+            error = "name 不能为空"
+        elif not mcp_server:
+            error = "mcp_server 不能为空"
+        elif not prompt_template:
+            error = "prompt_template 不能为空"
+        elif not schedule:
+            error = "schedule 不能为空"
+        elif not croniter.is_valid(schedule):
+            error = f"schedule '{schedule}' 不是合法的 cron 表达式"
+        elif available_ds is not None and mcp_server not in available_ds:
+            error = f"数据源 '{mcp_server}' 不存在，可用: {available_ds}"
+        elif name in existing_names:
+            error = f"规则名称 '{name}' 已存在"
+
+        if error:
+            failed.append({"index": idx, "name": name or f"rule_{idx}", "error": error})
+            continue
+
+        # Create
+        try:
+            rule_id = f"chat-{uuid.uuid4().hex[:8]}"
+            async with get_session() as session:
+                rule = AlertRule(
+                    id=rule_id,
+                    name=name,
+                    mcp_server=mcp_server,
+                    prompt_template=prompt_template,
+                    schedule=schedule,
+                    data_window=data_window,
+                    source="chat",
+                    enabled=enabled,
+                )
+                rule = await create(session, rule)
+
+            if enabled and _scheduler is not None:
+                _register_rule_schedule(rule_id, schedule)
+
+            existing_names.add(name)  # Prevent duplicates within batch
+            created.append({
                 "id": rule.id,
                 "name": rule.name,
                 "datasource": rule.mcp_server,
@@ -485,12 +503,35 @@ async def create_rule(**kwargs: Any) -> dict:
                 "schedule_human": _describe_cron(schedule),
                 "data_window": data_window,
                 "enabled": enabled,
-            },
-            "hint": f"规则已创建（{_describe_cron(schedule)}执行）。建议使用 test_rule 试运行验证。",
+            })
+        except Exception as e:
+            logger.error("create_rule: failed to create '{}': {}", name, e)
+            failed.append({"index": idx, "name": name, "error": str(e)})
+
+    # Single rule response (backward compatible)
+    if len(rules_input) == 1 and len(created) == 1:
+        return {
+            "data": created[0],
+            "hint": f"规则已创建（{created[0]['schedule_human']}执行）。建议使用 test_rule 试运行验证。",
         }
-    except Exception as e:
-        logger.error("create_rule failed: {}", e)
-        return {"error": f"创建规则失败: {e}", "hint": "请检查参数后重试。"}
+    if len(rules_input) == 1 and failed:
+        return {"error": failed[0]["error"], "hint": "请检查参数后重试。"}
+
+    # Batch response
+    hint_parts = [f"批量创建完成：成功 {len(created)} 条"]
+    if failed:
+        hint_parts.append(f"失败 {len(failed)} 条")
+    hint = "，".join(hint_parts) + "。"
+
+    return {
+        "data": {
+            "created": created,
+            "created_count": len(created),
+            "failed": failed,
+            "failed_count": len(failed),
+        },
+        "hint": hint,
+    }
 
 
 async def update_rule(**kwargs: Any) -> dict:
