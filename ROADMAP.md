@@ -75,17 +75,95 @@ T20 + T12 → T24(飞书 Bot)
 T20-T24 全部完成 → T25(清理传统数据流)
 ```
 
-## v4: MCP 规范检测 + Agent 增强
-- [ ] 第三方 MCP Server 安全规范检测（不规范提醒）
-- [ ] 多 Agent 协作（跨数据源联合分析）
-- [ ] Agent SDK 集成（OpenAI Agents SDK / Pydantic AI）
-- [ ] 规则版本管理
+## v4: AI 经营助手改版（产品重新定位）
 
-## v5: Web 管理界面
-- [ ] Dashboard
-- [ ] 规则可视化配置
-- [ ] 告警历史查看
-- [ ] 手动触发检测
+> 产品定位从"数据监控中台"升级为"AI 经营助手"
+> 详细方案见 `.local/product-plan-v4.md`
+
+### 架构基础（第一批）
+- [x] **N1: 统一数据访问层** — 固定工具集（list_datasources / get_schema / query），内部按数据源类型路由（SQL / MCP / API Adapter），工具数量不随数据源增长
+- [x] **N8: 业务知识注入** — business_context 配置 + system prompt 注入 + 对话更新
+- [x] **N5: 会话管理** — /new /list /switch /delete，会话持久化（DB），最近 N 轮 context 截断
+
+### 产品差异化（第二批）
+- [x] **N4: 自然语言配规则** — 用户对话描述监控需求 → LLM 调用 get_schema 理解数据 → 生成结构化规则 → 用户确认生效
+
+### 增值功能（第三批）
+- [x] **N6: 定时报告** — 日报/周报自动生成推送，定时收集全局数据 + LLM 生成摘要
+- [x] **N7: CSV 辅助输入** — 上传 SKU 列表等作为查询筛选条件，结合已接入数据源分析（非独立数据源）
+
+### 任务依赖关系
+```
+N1(统一数据访问层) → N4(自然语言配规则)
+N1 → N6(定时报告)
+N1 → N7(CSV 辅助输入)
+N5(会话管理) → N4
+N8(业务知识注入) 无依赖，可并行
+```
+
+### 统一 Agent 改造（第四批）
+- [x] **N9: 规则工具** — 5 个规则管理工具（list/create/update/delete/test_rule），cron 校验，动态调度注册
+- [x] **N10: 上下文工具** — 3 个业务知识工具（list/add/delete_context），分类 + 过期机制，system prompt 注入
+- [x] **N11: 告警历史工具** — 1 个工具（list_alerts），按规则/时间/限制过滤，severity 分布
+- [x] **N12: 统一 Agent** — 12 工具 + 写拦截 + AgentResult + run_unified()，保留 run() 向后兼容
+- [x] **N13: 飞书重构** — 删除意图分类，简化为：消息→检查 pending→调 Agent→回复，删除 rule_agent.py
+- [x] **N14: 会话超时** — 30 分钟不活跃自动新建会话，session_timeout_minutes 可配置，0=禁用
+
+### 任务依赖关系
+```
+N9(规则工具) + N10(上下文工具) + N11(告警历史) → N12(统一Agent)
+N12 → N13(飞书重构)
+N5(会话管理) + N13 → N14(会话超时)
+```
+
+## v5: 产品完整度（对话闭环 + 可观测性）
+
+> 产品定位：对话即配置。所有管理操作通过 Bot 对话完成，不依赖 Web UI。
+> 本版本聚焦：让已有功能形成闭环，补齐可观测性短板。
+
+### 第一批（核心闭环 + 可观测性）
+- [x] **P1: 告警闭环** — Alert 新增 resolution 状态（handled/ignored/false_positive），2 个工具（handle_alert/get_alert_stats），对话标记处理 + 统计
+- [x] **P2: LLM 用量追踪** — LLMUsageLog 表自动记录每次 Agent 调用，1 个工具（get_usage_stats），按规则/触发类型/模型/天分组统计 + 成本估算
+- [x] **P4: 数据源健康监控** — 定时探活（APScheduler）+ 连续失败自动推送告警 + 恢复通知，1 个工具（check_health），24h 可用率
+
+### 第二批（体验优化）
+- [x] **P3: 规则效果评估** — 增强 list_rules 返回值（触发次数/误报率/执行成功率），1 个工具（get_rule_stats），智能 hint 引导规则调优
+- [x] **P6: 报告模板定制** — ReportConfig 新增 sections/kpis，2 个工具（manage_report/preview_report），对话定制报告章节和指标
+
+### 任务依赖关系
+```
+P1(告警闭环) → P3(规则效果评估)
+P2(LLM用量), P4(数据源健康) 无依赖，可并行
+P6(报告定制) 无依赖，可独立
+```
+
+### 工具变化
+```
+v4 现有 12 工具 → v5 新增 7 工具 = 共 19 工具
+
+新增：
+  handle_alert      — 标记告警处理状态
+  get_alert_stats   — 告警统计面板
+  get_usage_stats   — LLM 用量和成本统计
+  check_health      — 数据源健康检查
+  get_rule_stats    — 单条规则效果详情
+  manage_report     — 报告配置管理
+  preview_report    — 报告预览
+```
+
+## v6: 外部知识源集成（待定）
+- [ ] MCP 连接飞书文档 — 自动同步运营维护的飞书表格/文档中的业务上下文
+- [ ] MCP 连接 Google Sheet — 自动读取运营维护的促销日历、备货计划等表格
+- [ ] 业务上下文自动同步 — 定时从外部文档源拉取，与本地 business_context 合并
+
+## 后续版本（待定）
+- [ ] 企业微信 Bot 双向对话 — 复用统一 Agent，企微应用消息回调
+- [ ] Web 管理界面 — Dashboard、规则可视化、告警历史
+- [ ] 自动执行（调价/补货/广告调整）— 需完善审批流和回滚机制
+- [ ] 竞品监控 — 需确定数据来源
+- [ ] 角色权限 / 审批流
+- [ ] 第三方 MCP Server 安全规范检测
+- [ ] 多 Agent 协作（跨数据源联合分析）
 
 ---
 Legend: [ ] Todo | [-] In Progress | [x] Completed

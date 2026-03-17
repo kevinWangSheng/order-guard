@@ -2,63 +2,15 @@
 # Built-in rules for OrderGuard
 
 rules:
-  - id: "rule-inventory-risk"
-    name: "库存风险检查"
-    description: "检查 SKU 是否存在缺货或积压风险"
-    connector: "csv-erp"
-    data_type: "inventory"
-    prompt: |
-      你是一个库存分析专家。请根据以下库存数据判断每个 SKU 的补货风险：
-
-      判断规则：
-      - 如果可售天数 < 补货周期，标记为 critical（紧急缺货风险）
-      - 如果可售天数 < 补货周期 * 1.5，标记为 warning（需关注）
-      - 如果可售天数 > 补货周期 * 5，标记为 warning（积压风险）
-      - 其他情况标记为 info（正常）
-
-      请结合商品特性给出补货建议。
-    enabled: true
-
-  - id: "rule-return-rate"
-    name: "退货率异常检查"
-    description: "检测退货率异常偏高的 SKU"
-    connector: "csv-erp"
-    data_type: "orders"
-    prompt: |
-      你是一个电商运营分析专家。请分析以下订单数据中退货率异常的 SKU：
-
-      判断规则：
-      - 退货率 > 10% 标记为 critical
-      - 退货率 > 5% 标记为 warning
-      - 退货率 > 3% 标记为 info
-
-      请分析可能的退货原因并给出改善建议。
-    enabled: true
-
-  - id: "rule-mcp-inventory"
-    name: "仓库库存智能检查（MCP）"
-    description: "通过 MCP Agent 自动探索数据库并分析库存风险"
-    connector_type: "mcp"
-    mcp_server: "test-warehouse"
-    prompt: |
-      请检查仓库数据库中的库存状况：
-      1. 查看有哪些商品及其库存数量
-      2. 结合近期销售数据，计算每个 SKU 的库存可售天数
-      3. 与安全库存（reorder_point）对比，判断是否需要补货
-      4. 找出积压商品（库存可售天数 > 90 天）
-      5. 检查退货率异常的 SKU（从 orders 表中分析）
-
-      对每个异常 SKU 输出 severity（critical/warning/info）、原因和建议。
-    enabled: true
-
   # ──────────────────────────────────────────────
   # MySQL ERP 数据库规则（通过 DBHub 连接）
+  # 数据源：orderguard_erp，50 SKU，跨境电商 ERP
+  # 数据时间：2025-12 ~ 2026-03
   # ──────────────────────────────────────────────
 
   - id: "rule-erp-stockout"
     name: "ERP 库存缺货检测"
     description: "基于 MySQL ERP 数据库检测缺货风险（DBHub）"
-    connector_type: "mcp"
     mcp_server: "mysql-erp"
     prompt: |
       请分析 ERP 数据库中的库存和销售数据，找出缺货风险：
@@ -76,7 +28,6 @@ rules:
   - id: "rule-erp-overstock"
     name: "ERP 库存积压检测"
     description: "检测库存积压和周转异常"
-    connector_type: "mcp"
     mcp_server: "mysql-erp"
     prompt: |
       请分析 ERP 数据库，找出库存积压问题：
@@ -93,7 +44,6 @@ rules:
   - id: "rule-erp-returns"
     name: "ERP 退货异常检测"
     description: "检测退货率异常偏高的商品"
-    connector_type: "mcp"
     mcp_server: "mysql-erp"
     prompt: |
       请分析 ERP 数据库中的退货情况：
@@ -106,52 +56,9 @@ rules:
       重点关注：退货原因集中在"质量问题"的 SKU。
     enabled: true
 
-  # ──────────────────────────────────────────────
-  # PostgreSQL 分析数据库规则（通过 DBHub 连接）
-  # ──────────────────────────────────────────────
-
-  - id: "rule-analytics-sales-trend"
-    name: "销售趋势异常检测"
-    description: "基于 PG 分析库检测销售趋势异常"
-    connector_type: "mcp"
-    mcp_server: "pg-analytics"
-    prompt: |
-      请分析分析数据库中的销售趋势：
-      1. 探索数据库结构（维度表 dim_* 和事实表 fact_*）
-      2. 从 fact_daily_sales 分析最近 7 天 vs 前 7 天的销量变化
-      3. 销量暴增（>200%）或暴跌（<50%）的 SKU 标记为异常
-      4. 按渠道(channel)分析，看哪个渠道波动最大
-      5. 按地区(region)分析，看是否有区域性异常
-      6. 从 agg_weekly_kpi 看整体趋势
-
-      重点：找出销量突变的商品/渠道/地区组合，分析可能原因。
-    enabled: true
-
-  - id: "rule-analytics-profitability"
-    name: "利润率异常检测"
-    description: "检测毛利率异常的商品和渠道"
-    connector_type: "mcp"
-    mcp_server: "pg-analytics"
-    prompt: |
-      请分析分析数据库中的利润情况：
-      1. 探索 dim_product 和 fact_daily_sales 表结构
-      2. 计算每个 SKU 近 30 天的毛利率：(revenue - cost) / revenue
-      3. 对比上月毛利率，找出大幅下降的 SKU
-      4. 毛利率 < 0（亏损）→ critical
-      5. 毛利率下降 > 20 个百分点 → warning
-      6. 从 agg_sku_monthly 验证月度趋势
-
-      重点关注：从盈利转为亏损的商品，分析是成本上涨还是价格下降。
-    enabled: true
-
-  # ──────────────────────────────────────────────
-  # 跨境电商专用规则
-  # ──────────────────────────────────────────────
-
   - id: "rule-erp-logistics-cost"
     name: "物流成本异常检测"
     description: "检测海运/空运成本波动和物流延误"
-    connector_type: "mcp"
     mcp_server: "mysql-erp"
     prompt: |
       请分析 ERP 数据库中的物流成本和时效数据：
@@ -172,7 +79,6 @@ rules:
   - id: "rule-erp-listing-health"
     name: "Listing 健康度检测"
     description: "检测 Review 评分下降、转化率异常、广告效率问题"
-    connector_type: "mcp"
     mcp_server: "mysql-erp"
     prompt: |
       请分析 ERP 数据库中的 Listing 表现数据：
@@ -193,7 +99,6 @@ rules:
   - id: "rule-erp-replenishment"
     name: "补货计划检测"
     description: "综合库存、销量、FBA库存、物流周期检测补货需求"
-    connector_type: "mcp"
     mcp_server: "mysql-erp"
     prompt: |
       请综合分析 ERP 数据库，生成补货建议：
@@ -214,10 +119,46 @@ rules:
       - 考虑季节性因素（如果近期销量增长，需要多备货）
     enabled: true
 
+  # ──────────────────────────────────────────────
+  # PostgreSQL 分析数据库规则（通过 DBHub 连接）
+  # 数据源：orderguard_analytics，星型模型 14 表
+  # ──────────────────────────────────────────────
+
+  - id: "rule-analytics-sales-trend"
+    name: "销售趋势异常检测"
+    description: "基于 PG 分析库检测销售趋势异常"
+    mcp_server: "pg-analytics"
+    prompt: |
+      请分析分析数据库中的销售趋势：
+      1. 探索数据库结构（维度表 dim_* 和事实表 fact_*）
+      2. 从 fact_daily_sales 分析最近 7 天 vs 前 7 天的销量变化
+      3. 销量暴增（>200%）或暴跌（<50%）的 SKU 标记为异常
+      4. 按渠道(channel)分析，看哪个渠道波动最大
+      5. 按地区(region)分析，看是否有区域性异常
+      6. 从 agg_weekly_kpi 看整体趋势
+
+      重点：找出销量突变的商品/渠道/地区组合，分析可能原因。
+    enabled: true
+
+  - id: "rule-analytics-profitability"
+    name: "利润率异常检测"
+    description: "检测毛利率异常的商品和渠道"
+    mcp_server: "pg-analytics"
+    prompt: |
+      请分析分析数据库中的利润情况：
+      1. 探索 dim_product 和 fact_daily_sales 表结构
+      2. 计算每个 SKU 近 30 天的毛利率：(revenue - cost) / revenue
+      3. 对比上月毛利率，找出大幅下降的 SKU
+      4. 毛利率 < 0（亏损）→ critical
+      5. 毛利率下降 > 20 个百分点 → warning
+      6. 从 agg_sku_monthly 验证月度趋势
+
+      重点关注：从盈利转为亏损的商品，分析是成本上涨还是价格下降。
+    enabled: true
+
   - id: "rule-analytics-logistics-trend"
     name: "物流成本趋势分析"
     description: "基于分析库检测物流成本长期趋势"
-    connector_type: "mcp"
     mcp_server: "pg-analytics"
     prompt: |
       请分析分析数据库中的物流成本趋势：
@@ -237,7 +178,6 @@ rules:
   - id: "rule-analytics-listing-review"
     name: "Listing 评分趋势分析"
     description: "分析评分和排名的长期趋势"
-    connector_type: "mcp"
     mcp_server: "pg-analytics"
     prompt: |
       请分析分析数据库中 Listing 表现的长期趋势：
@@ -253,4 +193,150 @@ rules:
       - 转化率随评分下降通常滞后 1-2 周
       - BSR 排名下降 + ACoS 上升 = 竞争力下降信号
       - 同 SKU 不同平台表现差异大 → 需要分平台优化策略
+    enabled: true
+
+  # ──────────────────────────────────────────────
+  # MySQL 生产模拟库规则（Kaggle 公开数据集）
+  # 数据源：orderguard_prod，100K 订单，巴西电商
+  # 表：orders, order_items, products, customers,
+  #     order_reviews, sales_returns, inventory_daily,
+  #     daily_sales_summary, seller_performance,
+  #     order_payments, product_categories, sellers
+  # ──────────────────────────────────────────────
+
+  - id: "rule-prod-delivery-delay"
+    name: "配送延迟检测"
+    description: "检测订单配送延迟率和严重延迟订单"
+    mcp_server: "mysql-prod"
+    prompt: |
+      请分析生产数据库中的订单配送时效：
+      1. 先探索数据库表结构，特别是 orders 表的字段
+      2. 对比 order_delivered_customer_date 和 order_estimated_delivery_date：
+         - 计算延迟天数 = 实际到达日 - 预计到达日
+         - 延迟 > 0 天的订单占比（整体延迟率）
+      3. 按 order_status 分布统计（delivered / shipped / canceled 等）
+      4. 找出延迟最严重的订单（延迟 > 15 天），关联 order_items 看涉及哪些商品品类
+      5. 按月趋势分析延迟率是否在恶化
+      6. 取消订单(canceled)的比例和趋势
+
+      判断标准：
+      - 整体延迟率 > 15% → warning，> 25% → critical
+      - 取消率 > 5% → warning，> 10% → critical
+      - 平均延迟天数 > 7 天 → warning
+      - 某品类延迟率显著高于均值（>2倍）→ warning，需排查供应商问题
+    enabled: true
+
+  - id: "rule-prod-review-alert"
+    name: "评分异常检测"
+    description: "检测客户评分趋势下降和差评集中的品类"
+    mcp_server: "mysql-prod"
+    prompt: |
+      请分析生产数据库中的客户评价数据：
+      1. 探索 order_reviews 表结构和数据量
+      2. 计算整体评分分布（1-5 分各占多少）
+      3. 按月分析平均评分趋势，找出评分下降的时段
+      4. 关联 order_items + products，按品类(product_category_name)统计平均评分
+      5. 找出平均评分 < 3.0 的品类 → critical
+      6. 找出评分 1-2 分占比 > 30% 的品类 → warning
+      7. 分析差评(score 1-2)的评论内容关键词（review_comment_message），
+         归纳主要投诉方向（配送慢/质量差/描述不符等）
+
+      业务规则：
+      - 平均评分 < 3.5 的品类需要整改或考虑下架
+      - 差评中如果"配送"相关关键词占比 > 50%，问题在物流而非产品
+      - 评分持续 3 个月下降的品类需要重点关注
+    enabled: true
+
+  - id: "rule-prod-refund-anomaly"
+    name: "退货退款异常检测"
+    description: "检测退款率异常、退款金额占比、品类维度分析"
+    mcp_server: "mysql-prod"
+    prompt: |
+      请分析生产数据库中的退货退款数据：
+      1. 探索 sales_returns 表结构（含 refunds, refunded_item_count, final_revenue 等字段）
+      2. 统计整体退款指标：
+         - 退款订单占比 = refunded_item_count > 0 的记录 / 总记录数
+         - 平均退款率 = SUM(refunds) / SUM(total_revenue)（注意 refunds 是负数表示退款）
+      3. 按 category 分组，找出退款率最高的品类 TOP10
+      4. 分析退款金额分布：大额退款（> $100）集中在哪些品类
+      5. 按月趋势分析退款率是否在恶化
+      6. 关联 price_reductions 字段，分析是否存在大量折扣后仍退款的情况
+
+      判断标准：
+      - 品类退款率 > 20% → critical
+      - 品类退款率 > 10% → warning
+      - 退款率环比上升 > 5 个百分点 → warning
+      - 退款金额占总营收 > 15% → critical
+    enabled: true
+
+  - id: "rule-prod-inventory-health"
+    name: "库存健康检测"
+    description: "检测库存水平异常：缺货风险和过度积压"
+    mcp_server: "mysql-prod"
+    prompt: |
+      请分析生产数据库中的库存健康状况：
+      1. 探索 inventory_daily 表结构（含 inventory_level, units_sold, units_ordered, demand_forecast, price, discount 等）
+      2. 取最新快照日期的数据，计算每个 product_id 的：
+         - 库存可售天数 = inventory_level / AVG(units_sold)（近 30 天日均）
+         - 需求预测偏差 = |实际销量 - demand_forecast| / demand_forecast
+      3. 按 category 和 region 维度汇总库存健康度
+      4. 找出缺货风险：
+         - inventory_level < 近 7 天日均 units_sold × 7（不到一周库存）→ critical
+         - inventory_level < 近 14 天日均 × 14 → warning
+      5. 找出积压风险：
+         - 库存可售天数 > 90 天 → warning
+         - 库存可售天数 > 180 天 → critical
+      6. 分析 competitor_price vs price，是否因价格过高导致滞销
+      7. 检查 holiday_promo = 1 期间的库存消耗速率变化
+
+      业务规则：
+      - 缺货会导致销售损失，积压会占用资金
+      - 促销期间库存消耗加速，需要提前备货
+      - 竞品价格持续低于自身价格 > 10%，可能导致滞销
+    enabled: true
+
+  - id: "rule-prod-seller-risk"
+    name: "卖家风险检测"
+    description: "检测高延迟率、低评分的问题卖家"
+    mcp_server: "mysql-prod"
+    prompt: |
+      请分析生产数据库中的卖家表现数据：
+      1. 探索 seller_performance 表结构（含 total_orders, avg_review_score, avg_delivery_days, late_delivery_pct）
+      2. 找出高风险卖家：
+         - late_delivery_pct > 30% → critical（配送严重不靠谱）
+         - late_delivery_pct > 15% → warning
+         - avg_review_score < 3.0 → critical（客户极不满意）
+         - avg_review_score < 3.5 → warning
+      3. 分析 GMV 集中度：TOP10 卖家占总 GMV 的比例，是否过度依赖少数卖家
+      4. 关联 sellers 表查看问题卖家的地理分布（seller_state）
+      5. 找出"大卖家+高延迟"组合（total_orders > 100 且 late_delivery_pct > 20%）→ 重点风险
+      6. 按 seller_state 统计各州卖家平均表现，识别区域性问题
+
+      业务规则：
+      - 大卖家延迟影响面广，优先处理
+      - 评分低 + 延迟高的卖家考虑降权或下架
+      - 单一卖家 GMV 占比 > 10% 存在供应链集中风险
+    enabled: true
+
+  - id: "rule-prod-category-trend"
+    name: "品类趋势分析"
+    description: "检测各品类销售趋势变化和异常波动"
+    mcp_server: "mysql-prod"
+    prompt: |
+      请分析生产数据库中的品类销售趋势：
+      1. 探索 daily_sales_summary 表结构（含 category, order_count, item_count, total_revenue, avg_review_score）
+      2. 按 category 统计近 30 天 vs 前 30 天的：
+         - 订单量变化率
+         - 营收变化率
+         - 平均评分变化
+      3. 找出增长最快的 TOP5 品类和下降最严重的 TOP5 品类
+      4. 关联 product_categories 表获取英文品类名（方便理解）
+      5. 计算运费占比(total_freight / total_revenue)，找出物流成本最高的品类
+      6. 分析品类集中度：TOP5 品类是否占据 > 60% 的营收
+
+      判断标准：
+      - 品类营收环比下降 > 30% → warning
+      - 品类营收环比下降 > 50% → critical
+      - 品类评分下降 > 0.5 分 → warning（质量或服务恶化信号）
+      - 运费占比 > 40% 的品类 → warning（利润空间被物流侵蚀）
     enabled: true

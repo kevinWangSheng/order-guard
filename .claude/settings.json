@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Users/shenghuikevin/dev/AI/order-guard && uv run pytest tests/ -v --tb=short 2>&1 | tail -30"
+          }
+        ]
+      }
+    ]
+  }
+}

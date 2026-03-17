@@ -134,12 +134,21 @@ feishu_bot:
   verification_token: "${FEISHU_VERIFICATION_TOKEN}"
   max_turns: 10                      # 最多保留对话轮数 / Max conversation turns
   context_ttl_minutes: 30            # 对话上下文过期时间 / Context TTL (minutes)
+  session_timeout_minutes: 30        # 会话超时自动归档（分钟）0=禁用 / Session auto-archive after idle (minutes), 0=disabled
   # 权限配置 / Permission settings
   permissions:
     - user_ids: ["*"]                # 所有人 / All users
       mcp_servers: ["test-warehouse"]
     # - user_ids: ["u_admin1"]       # 管理员 / Admin users
     #   mcp_servers: ["production-erp", "analytics-db"]
+
+# 数据源健康检查 / Data source health check
+health_check:
+  enabled: true                    # 是否启用 / Enable health checks
+  interval_minutes: 5              # 检查间隔（分钟） / Check interval in minutes
+  timeout_seconds: 10              # 单次检查超时 / Single check timeout
+  alert_threshold: 3               # 连续失败 N 次推送告警 / Alert after N consecutive failures
+  retention_hours: 72              # 日志保留时间 / Log retention hours
 
 # 定时任务配置 / Scheduler settings
 scheduler:
@@ -149,6 +158,9 @@ scheduler:
       cron: "0 9 * * *"           # Cron 表达式 / Cron expression (每天9点)
       rule_ids: ["rule-001"]       # 关联规则 ID / Associated rule IDs
       connector: "mock"            # 数据源 / Data source connector
+
+# 规则文件路径 / Rules file path
+rules_file: "rules.yaml"             # 默认 rules.yaml，可改为其他路径
 
 # 规则配置示例（在 rules.yaml 中）/ Rule config example (in rules.yaml):
 # rules:

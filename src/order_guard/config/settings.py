@@ -30,6 +30,7 @@ class LLMConfig(BaseModel):
     api_base: str | None = None
     max_tokens: int = 4096
     temperature: float = 0.1
+    custom_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
 
 
 class DatabaseConfig(BaseModel):
@@ -112,7 +113,26 @@ class FeishuBotConfig(BaseModel):
     encrypt_key: str = ""
     max_turns: int = 10              # Max conversation turns to keep
     context_ttl_minutes: int = 30    # Conversation context TTL
+    session_timeout_minutes: int = 30  # Auto-archive session after N minutes idle; 0 = disabled
     permissions: list[FeishuBotPermission] = Field(default_factory=list)
+
+
+class ReportConfigItem(BaseModel):
+    id: str
+    name: str = ""
+    schedule: str = ""                  # cron expression
+    mcp_server: str = ""
+    focus: str = ""                     # report content prompt
+    channels: str = "default"
+    enabled: bool = True
+
+
+class HealthCheckConfig(BaseModel):
+    enabled: bool = True
+    interval_minutes: int = 5
+    timeout_seconds: int = 10
+    alert_threshold: int = 3  # 连续失败 N 次告警
+    retention_hours: int = 72
 
 
 class SchedulerConfig(BaseModel):
@@ -160,7 +180,11 @@ class Settings(BaseSettings):
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     feishu_bot: FeishuBotConfig = Field(default_factory=FeishuBotConfig)
+    health_check: HealthCheckConfig = Field(default_factory=HealthCheckConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+    reports: list[ReportConfigItem] = Field(default_factory=list)
+    rules_file: str = "rules.yaml"  # Path to rules YAML file
+    business_context: str = ""  # Business knowledge injected into Agent prompts
 
     @model_validator(mode="before")
     @classmethod

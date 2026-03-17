@@ -105,7 +105,7 @@ class MCPConnection:
         if self._exit_stack:
             try:
                 await self._exit_stack.aclose()
-            except Exception as e:
+            except BaseException as e:
                 logger.warning("Error closing MCP connection '{}': {}", self.name, e)
             self._exit_stack = None
 

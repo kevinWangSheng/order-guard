@@ -88,6 +88,7 @@ class SchemaLoader:
     def __init__(self, mcp_connection: MCPConnection, sample_rows: int = 3):
         self._mcp = mcp_connection
         self._sample_rows = sample_rows
+        self._is_sqlite: bool = False  # Set during table discovery
 
     async def load(self) -> SchemaInfo:
         """Load full schema from MCP server by calling available tools."""
@@ -134,20 +135,29 @@ class SchemaLoader:
 
     async def _discover_tables_via_sql(self) -> list[str]:
         """Discover tables via SQL (supports SQLite, MySQL, PostgreSQL)."""
-        queries = [
-            # SQLite
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-            # MySQL / PostgreSQL information_schema
-            "SELECT table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'performance_schema', 'mysql', 'sys') ORDER BY table_name",
-        ]
-        for sql in queries:
-            try:
-                result = await self._mcp.call_tool("execute_sql", {"sql": sql})
-                names = self._parse_table_names_from_sql(result)
-                if names:
-                    return names
-            except Exception:
-                continue
+        # Try MySQL / PostgreSQL information_schema first
+        try:
+            result = await self._mcp.call_tool("execute_sql", {
+                "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'performance_schema', 'mysql', 'sys') ORDER BY table_name",
+            })
+            names = self._parse_table_names_from_sql(result)
+            if names:
+                return names
+        except Exception:
+            pass
+
+        # SQLite fallback
+        try:
+            result = await self._mcp.call_tool("execute_sql", {
+                "sql": "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            })
+            names = self._parse_table_names_from_sql(result)
+            if names:
+                self._is_sqlite = True
+                return names
+        except Exception:
+            pass
+
         return []
 
     async def _load_table_schema(self, table_name: str) -> TableSchema:
@@ -180,10 +190,12 @@ class SchemaLoader:
     async def _load_columns_via_sql(self, table_name: str) -> list[ColumnInfo]:
         """Load columns via SQL."""
         queries = [
-            # SQLite
-            f"PRAGMA table_info('{table_name}')",
-            # MySQL / PostgreSQL
+            # MySQL (has column_comment)
             f"SELECT column_name, data_type, column_comment FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position",
+            # PostgreSQL (no column_comment column)
+            f"SELECT column_name, data_type, '' as column_comment FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position",
+            # SQLite fallback
+            f"PRAGMA table_info('{table_name}')",
         ]
         for sql in queries:
             try:
@@ -197,40 +209,61 @@ class SchemaLoader:
 
     async def _load_indexes_via_sql(self, table_name: str) -> list[IndexInfo]:
         """Load index info via SQL."""
+        queries = [
+            # MySQL information_schema.statistics
+            f"SELECT index_name, column_name, non_unique FROM information_schema.statistics WHERE table_name = '{table_name}' ORDER BY index_name, seq_in_index",
+            # PostgreSQL pg_indexes
+            f"SELECT indexname as index_name FROM pg_indexes WHERE tablename = '{table_name}'",
+        ]
+        for sql in queries:
+            try:
+                result = await self._mcp.call_tool("execute_sql", {"sql": sql})
+                indexes = self._parse_indexes_from_info_schema(result)
+                if indexes:
+                    return indexes
+            except Exception:
+                continue
+
+        # SQLite PRAGMA
         try:
-            # SQLite PRAGMA
             result = await self._mcp.call_tool("execute_sql", {"sql": f"PRAGMA index_list('{table_name}')"})
             return self._parse_indexes_from_pragma(result)
-        except Exception:
-            pass
-
-        try:
-            # MySQL / PostgreSQL
-            sql = f"SELECT index_name, column_name, non_unique FROM information_schema.statistics WHERE table_name = '{table_name}' ORDER BY index_name, seq_in_index"
-            result = await self._mcp.call_tool("execute_sql", {"sql": sql})
-            return self._parse_indexes_from_info_schema(result)
         except Exception:
             pass
 
         return []
 
     async def _load_foreign_keys_via_sql(self, table_name: str) -> list[ForeignKeyInfo]:
-        """Load foreign key info via SQL."""
-        try:
-            result = await self._mcp.call_tool("execute_sql", {"sql": f"PRAGMA foreign_key_list('{table_name}')"})
-            return self._parse_fks_from_pragma(result)
-        except Exception:
-            return []
+        """Load foreign key info via SQL.
+
+        Only attempts SQLite PRAGMA if we already know this is a SQLite DB
+        (i.e. tables were discovered via sqlite_master). Avoids READONLY_VIOLATION
+        errors on MySQL/PG where PRAGMA is not a valid read operation.
+        """
+        if self._is_sqlite:
+            try:
+                result = await self._mcp.call_tool("execute_sql", {"sql": f"PRAGMA foreign_key_list('{table_name}')"})
+                fks = self._parse_fks_from_pragma(result)
+                if fks:
+                    return fks
+            except Exception:
+                pass
+        # MySQL / PostgreSQL FK discovery is nice-to-have, skip for now
+        return []
 
     async def _load_sample_data(self, table_name: str) -> list[dict[str, Any]]:
         """Load sample rows from a table."""
-        try:
-            sql = f"SELECT * FROM \"{table_name}\" LIMIT {self._sample_rows}"
-            result = await self._mcp.call_tool("execute_sql", {"sql": sql})
-            return self._parse_sample_rows(result)
-        except Exception as e:
-            logger.debug("Failed to load sample data for '{}': {}", table_name, e)
-            return []
+        # Try backtick quoting (MySQL), then double-quote (PostgreSQL/SQLite)
+        for quote in ("`", '"'):
+            try:
+                sql = f"SELECT * FROM {quote}{table_name}{quote} LIMIT {self._sample_rows}"
+                result = await self._mcp.call_tool("execute_sql", {"sql": sql})
+                rows = self._parse_sample_rows(result)
+                if rows:
+                    return rows
+            except Exception:
+                continue
+        return []
 
     # --- Parsers ---
 
@@ -257,18 +290,45 @@ class SchemaLoader:
         """Parse table names from SQL query result."""
         try:
             data = json.loads(result)
-            if isinstance(data, list):
-                names = []
-                for row in data:
-                    if isinstance(row, dict):
-                        val = row.get("name") or row.get("table_name") or row.get("Name") or row.get("TABLE_NAME")
-                        if val:
-                            names.append(val)
-                    elif isinstance(row, (list, tuple)) and row:
-                        names.append(str(row[0]))
-                return names
+            rows = self._extract_rows(data)
+            names = []
+            for row in rows:
+                if isinstance(row, dict):
+                    # Try common column names; fall back to first value
+                    val = row.get("name") or row.get("table_name") or row.get("Name") or row.get("TABLE_NAME")
+                    if not val:
+                        # Grab the first value (e.g. "Tables_in_xxx" from SHOW TABLES)
+                        vals = list(row.values())
+                        val = vals[0] if vals else None
+                    if val:
+                        names.append(str(val))
+                elif isinstance(row, (list, tuple)) and row:
+                    names.append(str(row[0]))
+            return names
         except (json.JSONDecodeError, TypeError):
             pass
+        return []
+
+    @staticmethod
+    def _extract_rows(data: Any) -> list:
+        """Extract row list from raw result, handling DBHub envelope format.
+
+        DBHub returns: {"success": true, "data": {"rows": [...]}}
+        Other servers may return a flat list: [{...}, ...]
+        """
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            # DBHub envelope: {"success": ..., "data": {"rows": [...]}}
+            inner = data.get("data")
+            if isinstance(inner, dict):
+                rows = inner.get("rows")
+                if isinstance(rows, list):
+                    return rows
+            # Simpler envelope: {"rows": [...]}
+            rows = data.get("rows")
+            if isinstance(rows, list):
+                return rows
         return []
 
     def _parse_columns(self, result: str) -> list[ColumnInfo]:
@@ -293,17 +353,17 @@ class SchemaLoader:
         """Parse columns from PRAGMA table_info or information_schema."""
         try:
             data = json.loads(result)
-            if isinstance(data, list):
-                columns = []
-                for row in data:
-                    if isinstance(row, dict):
-                        # PRAGMA table_info format: {cid, name, type, notnull, dflt_value, pk}
-                        name = row.get("name") or row.get("column_name") or row.get("COLUMN_NAME", "")
-                        col_type = row.get("type") or row.get("data_type") or row.get("DATA_TYPE", "")
-                        comment = row.get("comment") or row.get("column_comment") or row.get("COLUMN_COMMENT", "")
-                        if name:
-                            columns.append(ColumnInfo(name=name, type=col_type, comment=comment))
-                return columns
+            rows = self._extract_rows(data)
+            columns = []
+            for row in rows:
+                if isinstance(row, dict):
+                    # PRAGMA table_info format: {cid, name, type, notnull, dflt_value, pk}
+                    name = row.get("name") or row.get("column_name") or row.get("COLUMN_NAME", "")
+                    col_type = row.get("type") or row.get("data_type") or row.get("DATA_TYPE", "")
+                    comment = row.get("comment") or row.get("column_comment") or row.get("COLUMN_COMMENT", "")
+                    if name:
+                        columns.append(ColumnInfo(name=name, type=col_type, comment=comment))
+            return columns
         except (json.JSONDecodeError, TypeError):
             pass
         return []
@@ -312,15 +372,15 @@ class SchemaLoader:
         """Parse indexes from SQLite PRAGMA index_list."""
         try:
             data = json.loads(result)
-            if isinstance(data, list):
-                return [
-                    IndexInfo(
-                        name=row.get("name", ""),
-                        unique=row.get("unique", 0) == 1,
-                    )
-                    for row in data
-                    if isinstance(row, dict) and row.get("name")
-                ]
+            rows = self._extract_rows(data)
+            return [
+                IndexInfo(
+                    name=row.get("name", ""),
+                    unique=row.get("unique", 0) == 1,
+                )
+                for row in rows
+                if isinstance(row, dict) and row.get("name")
+            ]
         except (json.JSONDecodeError, TypeError):
             pass
         return []
@@ -329,19 +389,19 @@ class SchemaLoader:
         """Parse indexes from information_schema.statistics."""
         try:
             data = json.loads(result)
-            if isinstance(data, list):
-                idx_map: dict[str, IndexInfo] = {}
-                for row in data:
-                    if not isinstance(row, dict):
-                        continue
-                    name = row.get("index_name") or row.get("INDEX_NAME", "")
-                    col = row.get("column_name") or row.get("COLUMN_NAME", "")
-                    unique = not (row.get("non_unique", 1) or row.get("NON_UNIQUE", 1))
-                    if name not in idx_map:
-                        idx_map[name] = IndexInfo(name=name, unique=unique)
-                    if col:
-                        idx_map[name].columns.append(col)
-                return list(idx_map.values())
+            rows = self._extract_rows(data)
+            idx_map: dict[str, IndexInfo] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                name = row.get("index_name") or row.get("INDEX_NAME", "")
+                col = row.get("column_name") or row.get("COLUMN_NAME", "")
+                unique = not (row.get("non_unique", 1) or row.get("NON_UNIQUE", 1))
+                if name not in idx_map:
+                    idx_map[name] = IndexInfo(name=name, unique=unique)
+                if col:
+                    idx_map[name].columns.append(col)
+            return list(idx_map.values())
         except (json.JSONDecodeError, TypeError):
             pass
         return []
@@ -350,16 +410,16 @@ class SchemaLoader:
         """Parse foreign keys from SQLite PRAGMA foreign_key_list."""
         try:
             data = json.loads(result)
-            if isinstance(data, list):
-                return [
-                    ForeignKeyInfo(
-                        column=row.get("from", ""),
-                        ref_table=row.get("table", ""),
-                        ref_column=row.get("to", ""),
-                    )
-                    for row in data
-                    if isinstance(row, dict) and row.get("from")
-                ]
+            rows = self._extract_rows(data)
+            return [
+                ForeignKeyInfo(
+                    column=row.get("from", ""),
+                    ref_table=row.get("table", ""),
+                    ref_column=row.get("to", ""),
+                )
+                for row in rows
+                if isinstance(row, dict) and row.get("from")
+            ]
         except (json.JSONDecodeError, TypeError):
             pass
         return []
@@ -368,8 +428,8 @@ class SchemaLoader:
         """Parse sample rows from SQL result."""
         try:
             data = json.loads(result)
-            if isinstance(data, list):
-                return [row for row in data if isinstance(row, dict)][:self._sample_rows]
+            rows = self._extract_rows(data)
+            return [row for row in rows if isinstance(row, dict)][:self._sample_rows]
         except (json.JSONDecodeError, TypeError):
             pass
         return []

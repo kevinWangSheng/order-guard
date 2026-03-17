@@ -397,6 +397,331 @@
         "MCP Agent 流程正常工作无回归",
         "所有测试通过"
       ]
+    },
+    {
+      "id": "N1",
+      "name": "统一数据访问层",
+      "layer": "架构基础",
+      "passes": true,
+      "depends_on": ["T16", "T17", "T20"],
+      "spec": "specs/n1-unified-data-access/",
+      "steps": [
+        "Agent 只看到 3 个数据查询工具：list_datasources / get_schema / query",
+        "工具数量不随数据源数量变化",
+        "list_datasources 返回所有已连接数据源",
+        "get_schema 返回表结构和字段详情",
+        "query 正确执行 SQL 并返回结果",
+        "多数据源路由正确（不同数据源互不干扰）",
+        "readonly / max_rows / timeout 安全特性保持",
+        "SQL 校验和查询审计保持",
+        "现有规则全部正常执行",
+        "飞书 Bot 对话正常工作",
+        "全量测试零回归"
+      ]
+    },
+    {
+      "id": "N8",
+      "name": "业务知识注入",
+      "layer": "架构基础",
+      "passes": true,
+      "depends_on": [],
+      "spec": "specs/n8-business-context/",
+      "steps": [
+        "config.example.yaml 包含 business_context 示例",
+        "Agent system prompt 包含 business_context",
+        "分析结果体现业务背景",
+        "通过对话更新 business_context",
+        "更新内容持久化到 DB",
+        "重启后知识仍然存在",
+        "business_context 为空时系统正常运行",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "N5",
+      "name": "会话管理",
+      "layer": "架构基础",
+      "passes": true,
+      "depends_on": ["T24"],
+      "spec": "specs/n5-session-management/",
+      "steps": [
+        "sessions 和 session_messages 表创建成功",
+        "create_session 创建新会话，旧 active 自动切换",
+        "飞书 Bot /new /list /switch /delete 命令正常",
+        "多轮对话 context 正确保持",
+        "超过 max_turns 后旧消息不发给 LLM",
+        "会话标题自动生成",
+        "重启后会话和消息持久化",
+        "CLI sessions 命令正常",
+        "全量测试零回归"
+      ]
+    },
+    {
+      "id": "N4",
+      "name": "自然语言配规则",
+      "layer": "产品差异化",
+      "passes": true,
+      "depends_on": ["N1", "N5"],
+      "spec": "specs/n4-natural-language-rules/",
+      "steps": [
+        "意图分类正确识别 CREATE_RULE / MANAGE_RULE",
+        "LLM 调用 get_schema 了解数据结构",
+        "LLM 生成的规则引用真实表和字段",
+        "规则预览格式化展示给用户",
+        "用户确认后写入 DB",
+        "新规则自动注册到调度器（无需重启）",
+        "规则查看/修改/启用/禁用/删除对话正常",
+        "端到端：对话创建规则 → 调度执行 → 产生告警",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "N6",
+      "name": "定时报告",
+      "layer": "增值功能",
+      "passes": true,
+      "depends_on": ["N1", "N8"],
+      "spec": "specs/n6-scheduled-reports/",
+      "steps": [
+        "config.example.yaml 包含 reports 配置示例",
+        "报告配置正确加载并同步到 DB",
+        "Agent 自动查数据生成经营摘要",
+        "摘要包含 focus 中要求的维度",
+        "报告推送到飞书/企微",
+        "report_history 正确记录",
+        "CLI reports list / run 命令正常",
+        "报告按 cron 定时执行",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "N7",
+      "name": "CSV 辅助输入",
+      "layer": "增值功能",
+      "passes": true,
+      "depends_on": ["N1", "N5"],
+      "spec": "specs/n7-csv-auxiliary-input/",
+      "steps": [
+        "飞书 Bot 能接收 CSV 和 Excel 文件",
+        "文件正确解析（含中文、不同编码）",
+        "文件大小和行数限制生效",
+        "小文件全量注入 context",
+        "大文件只注入摘要",
+        "Agent 结合 CSV + 数据库数据分析",
+        "CSV context 只在当前会话有效",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "N9",
+      "name": "规则工具",
+      "layer": "统一Agent",
+      "passes": true,
+      "depends_on": ["N4"],
+      "spec": "specs/n9-rule-tools/",
+      "steps": [
+        "5 个规则工具注册成功（list/create/update/delete/test）",
+        "cron 表达式校验（croniter）",
+        "动态调度注册/注销",
+        "工具返回 data/hint 或 error/hint 格式",
+        "有 37 个单元测试"
+      ]
+    },
+    {
+      "id": "N10",
+      "name": "上下文工具",
+      "layer": "统一Agent",
+      "passes": true,
+      "depends_on": ["N8"],
+      "spec": "specs/n10-context-tools/",
+      "steps": [
+        "3 个工具注册成功（list/add/delete_context）",
+        "BusinessContext 支持 category + expires_at",
+        "build_context_injection 按分类分组 + 过期过滤",
+        "有 31 个单元测试"
+      ]
+    },
+    {
+      "id": "N11",
+      "name": "告警历史工具",
+      "layer": "统一Agent",
+      "passes": true,
+      "depends_on": ["T08"],
+      "spec": "specs/n11-alert-history/",
+      "steps": [
+        "list_alerts 工具注册成功",
+        "按 rule_id / time_range / limit 过滤",
+        "severity 分布统计",
+        "有 16 个单元测试"
+      ]
+    },
+    {
+      "id": "N12",
+      "name": "统一 Agent",
+      "layer": "统一Agent",
+      "passes": true,
+      "depends_on": ["N9", "N10", "N11"],
+      "spec": "specs/n12-unified-agent/",
+      "steps": [
+        "Agent 支持 12 工具",
+        "WRITE_TOOLS 写拦截",
+        "AgentResult 含 pending_action",
+        "run_unified() 交互模式",
+        "run() 向后兼容",
+        "有 19 个单元测试"
+      ]
+    },
+    {
+      "id": "N13",
+      "name": "飞书重构",
+      "layer": "统一Agent",
+      "passes": true,
+      "depends_on": ["N12"],
+      "spec": "specs/n13-feishu-refactor/",
+      "steps": [
+        "意图分类代码已删除",
+        "独立 handler 已删除",
+        "rule_agent.py 已删除",
+        "主流程简化为 消息→pending→Agent→回复",
+        "CLI 使用统一 Agent",
+        "全量测试零回归"
+      ]
+    },
+    {
+      "id": "N14",
+      "name": "会话超时",
+      "layer": "统一Agent",
+      "passes": true,
+      "depends_on": ["N5", "N13"],
+      "spec": "specs/n14-session-timeout/",
+      "steps": [
+        "30 分钟不活跃自动新建会话",
+        "session_timeout_minutes 可配置",
+        "timeout=0 禁用功能",
+        "新会话无历史不超时",
+        "/new 保留不受影响",
+        "config.example.yaml 包含配置项",
+        "有单元测试"
+      ]
+    },
+    {
+      "id": "P1",
+      "name": "告警闭环",
+      "layer": "产品完整度",
+      "passes": true,
+      "depends_on": ["N11"],
+      "spec": "specs/p1-alert-lifecycle/",
+      "steps": [
+        "Alert 表新增 resolution / resolved_by / resolved_at / note 字段",
+        "Alembic 迁移执行无报错",
+        "handle_alert 单条处理正常（传 alert_id + resolution）",
+        "handle_alert 批量处理正常（传 rule_id + time_range）",
+        "已处理的告警可重新标记",
+        "get_alert_stats 返回总数、级别分布、处理率、平均处理时间、top 规则",
+        "get_alert_stats 支持 time_range 和 rule_id 筛选",
+        "list_alerts 返回值新增 resolution 字段",
+        "handle_alert 和 get_alert_stats 注册到 Agent 工具集",
+        "统一返回信封 {data, hint} / {error, hint}",
+        "有单元测试",
+        "全量回归零失败"
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "LLM 用量追踪",
+      "layer": "产品完整度",
+      "passes": true,
+      "depends_on": [],
+      "spec": "specs/p2-llm-usage-tracking/",
+      "steps": [
+        "LLMUsageLog 表创建成功",
+        "Alembic 迁移执行无报错",
+        "规则巡检后自动记录 LLM 用量（trigger_type=rule）",
+        "对话查询后自动记录 LLM 用量（trigger_type=chat）",
+        "报告生成后自动记录 LLM 用量（trigger_type=report）",
+        "已知模型成本正确估算（精确 + 前缀匹配）",
+        "未知模型 cost_estimate_usd = 0",
+        "custom_pricing 配置覆盖内置价格",
+        "get_usage_stats 返回总 token 和总成本",
+        "get_usage_stats 支持 group_by（rule/trigger_type/model/day）",
+        "get_usage_stats 支持 time_range 和 rule_id 筛选",
+        "get_usage_stats 注册到 Agent 工具集",
+        "统一返回信封 {data, hint} / {error, hint}",
+        "有单元测试",
+        "全量回归零失败"
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "规则效果评估",
+      "layer": "产品完整度",
+      "passes": true,
+      "depends_on": ["P1"],
+      "spec": "specs/p3-rule-effectiveness/",
+      "steps": [
+        "list_rules 返回新增 trigger_count_7d / false_positive_rate / last_triggered_at / run_success_rate",
+        "list_rules hint 智能提示（误报率高 / 长期未触发 / 执行失败率高）",
+        "get_rule_stats 返回执行统计（total_runs, success_rate, avg_duration_ms）",
+        "get_rule_stats 返回告警统计（total_alerts, by_severity, by_resolution, false_positive_rate）",
+        "get_rule_stats 返回趋势（每日告警数数组）",
+        "get_rule_stats 支持 time_range（7d/30d/90d）",
+        "新建规则（无数据）统计全零不报错",
+        "get_rule_stats 注册到 Agent 工具集",
+        "统一返回信封 {data, hint} / {error, hint}",
+        "有单元测试",
+        "全量回归零失败"
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "数据源健康监控",
+      "layer": "产品完整度",
+      "passes": true,
+      "depends_on": ["N1"],
+      "spec": "specs/p4-datasource-health/",
+      "steps": [
+        "DataSourceHealthLog 表创建成功",
+        "Alembic 迁移执行无报错",
+        "config.example.yaml 包含 health_check 配置段",
+        "正常数据源探活返回 healthy + latency_ms",
+        "异常数据源探活返回 unhealthy + error 描述",
+        "超时探活返回 timeout",
+        "定时健康检查 Job 按 interval_minutes 执行",
+        "连续失败 >= threshold 次自动推送告警（含受影响规则列表）",
+        "恢复后自动推送恢复通知（含故障持续时间）",
+        "check_health 工具支持单个和全部数据源检查",
+        "返回 24h 可用率",
+        "健康日志超过 retention_hours 自动清理",
+        "check_health 注册到 Agent 工具集",
+        "统一返回信封 {data, hint} / {error, hint}",
+        "有单元测试",
+        "全量回归零失败"
+      ]
+    },
+    {
+      "id": "P6",
+      "name": "报告模板定制",
+      "layer": "产品完整度",
+      "passes": true,
+      "depends_on": ["N6"],
+      "spec": "specs/p6-report-customization/",
+      "steps": [
+        "ReportConfig 表新增 sections / kpis / template_style 字段",
+        "Alembic 迁移执行无报错",
+        "现有报告配置（无 sections）正常加载（向后兼容）",
+        "manage_report(list) 返回所有报告配置",
+        "manage_report(get) 返回完整配置含 sections 和 kpis",
+        "manage_report(update) 正确更新并同步调度",
+        "manage_report(update) 经过写操作确认拦截",
+        "有 sections 时按章节分段生成报告",
+        "无 sections 时保持现有 focus 逻辑",
+        "kpis 格式化正确（number/currency/percent）",
+        "preview_report 生成报告但不推送",
+        "manage_report 和 preview_report 注册到 Agent 工具集",
+        "统一返回信封 {data, hint} / {error, hint}",
+        "有单元测试",
+        "全量回归零失败"
+      ]
     }
   ]
 }

@@ -260,3 +260,5 @@ class TestFeishuBotConfig:
         assert config.enabled is True
         assert config.app_id == "test_id"
         assert len(config.permissions) == 1
+
+

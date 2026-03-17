@@ -41,7 +41,7 @@ class MCPManager:
         for name, conn in self._connections.items():
             try:
                 await conn.disconnect()
-            except Exception as e:
+            except BaseException as e:
                 logger.warning("Error disconnecting MCP server '{}': {}", name, e)
 
     def get_connection(self, name: str) -> MCPConnection:

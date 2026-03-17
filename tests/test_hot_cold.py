@@ -139,13 +139,19 @@ class TestTimeConstraint:
 # ---------------------------------------------------------------------------
 
 class TestLargeTableStrategy:
-    def test_system_prompt_includes_query_strategy(self):
-        """System prompt should include large table query strategy."""
+    def test_system_prompt_is_concise(self):
+        """System prompt should focus on role + output format, not query strategy.
+
+        Query safety (auto-LIMIT, reject writes, etc.) is enforced by DAL code,
+        not by asking LLM to self-regulate via prompt.
+        """
         from order_guard.engine.agent import AGENT_SYSTEM_PROMPT
-        assert "COUNT(*)" in AGENT_SYSTEM_PROMPT
-        assert "10000" in AGENT_SYSTEM_PROMPT
-        assert "LIMIT" in AGENT_SYSTEM_PROMPT
-        assert "GROUP BY" in AGENT_SYSTEM_PROMPT
+        # Should have role and output format
+        assert "数据分析" in AGENT_SYSTEM_PROMPT
+        assert "JSON" in AGENT_SYSTEM_PROMPT
+        # Query strategy should NOT be in system prompt (handled by DAL)
+        assert "COUNT(*)" not in AGENT_SYSTEM_PROMPT
+        assert "10000" not in AGENT_SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------

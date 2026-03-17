@@ -44,6 +44,18 @@ async def lifespan(app: FastAPI):
     if mcp_configs:
         await mcp_manager.connect_all()
 
+    # Set up DataAccessLayer (v4 unified data access)
+    from order_guard.data_access import DataAccessLayer
+    data_access_layer = DataAccessLayer(mcp_manager, mcp_configs)
+    await data_access_layer.initialize()
+
+    # Sync reports from YAML
+    from order_guard.engine.reporter import ReportManager
+    report_manager = ReportManager()
+    if settings.reports:
+        report_defs = [r.model_dump() for r in settings.reports]
+        await report_manager.sync_reports_to_db(report_defs)
+
     # Set up scheduler
     from order_guard.engine.analyzer import Analyzer
     from order_guard.scheduler.setup import create_scheduler
@@ -52,6 +64,8 @@ async def lifespan(app: FastAPI):
         rule_manager=rule_manager,
         analyzer=analyzer,
         dispatcher=dispatcher,
+        data_access_layer=data_access_layer,
+        mcp_manager=mcp_manager,
     )
 
     # Store components on app state for access in routes/CLI
@@ -59,14 +73,17 @@ async def lifespan(app: FastAPI):
     app.state.dispatcher = dispatcher
     app.state.analyzer = analyzer
     app.state.mcp_manager = mcp_manager
+    app.state.data_access_layer = data_access_layer
     app.state.scheduler = scheduler
 
     # Set up Feishu Bot
     if settings.feishu_bot.enabled:
-        from order_guard.api.feishu import router as feishu_router, setup_feishu_bot
+        from order_guard.api.feishu import router as feishu_router, setup_feishu_bot, start_feishu_ws
         app.include_router(feishu_router)
         setup_feishu_bot(app.state, settings.feishu_bot)
-        logger.info("Feishu Bot enabled")
+        # Start WebSocket long connection (no public IP needed)
+        start_feishu_ws(app.state, settings.feishu_bot)
+        logger.info("Feishu Bot enabled (WebSocket mode)")
 
     # Start scheduler
     if settings.scheduler.enabled:

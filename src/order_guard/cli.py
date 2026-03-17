@@ -90,12 +90,18 @@ async def _run_detection(rule_id: str | None, dry_run: bool):
 
     # Set up MCP manager if configured
     mcp_manager = None
+    data_access_layer = None
     if settings.mcp_servers:
         from order_guard.mcp import MCPManager
         from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
         mcp_configs = [MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers]
         mcp_manager = MCPManager(mcp_configs)
         await mcp_manager.connect_all()
+
+        # Initialize DataAccessLayer (v4)
+        from order_guard.data_access import DataAccessLayer
+        data_access_layer = DataAccessLayer(mcp_manager, mcp_configs)
+        await data_access_layer.initialize()
 
     # Determine which rules to run
     if rule_id:
@@ -120,6 +126,7 @@ async def _run_detection(rule_id: str | None, dry_run: bool):
             dispatcher=dispatcher,
             dry_run=dry_run,
             mcp_manager=mcp_manager,
+            data_access_layer=data_access_layer,
         )
         if task_run:
             from order_guard.storage.database import get_session
@@ -141,6 +148,101 @@ async def _run_detection(rule_id: str | None, dry_run: bool):
                         console.print(f"Summary: {summary.get('summary', 'N/A')[:200]}")
 
     # Cleanup MCP connections
+    if mcp_manager:
+        await mcp_manager.disconnect_all()
+
+
+# ---------------------------------------------------------------------------
+# init-rules
+# ---------------------------------------------------------------------------
+
+@app.command("init-rules")
+def init_rules():
+    """扫描数据源，自动推荐并创建监控规则"""
+    asyncio.run(_init_rules())
+
+
+async def _init_rules():
+    from order_guard.config import get_settings
+    from order_guard.engine.agent import Agent, AgentConfig
+    from order_guard.engine.llm_client import LLMClient
+    from order_guard.engine.prompts import INIT_RULES_PROMPT, build_unified_prompt
+    from order_guard.storage.database import init_db, reset_engine
+    from order_guard.tools import rule_tools, context_tools, alert_tools, data_tools, health_tools, report_tools, usage_tools
+
+    reset_engine()
+    await init_db()
+
+    settings = get_settings()
+
+    # Initialize MCP + DAL
+    mcp_manager = None
+    data_access_layer = None
+    if settings.mcp_servers:
+        from order_guard.mcp import MCPManager
+        from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
+        mcp_configs = [MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers]
+        mcp_manager = MCPManager(mcp_configs)
+        console.print("[dim]连接数据源...[/dim]")
+        await mcp_manager.connect_all()
+        from order_guard.data_access import DataAccessLayer
+        data_access_layer = DataAccessLayer(mcp_manager, mcp_configs)
+        await data_access_layer.initialize()
+        data_tools.configure(data_access_layer=data_access_layer)
+        rule_tools.configure(data_access_layer=data_access_layer, mcp_manager=mcp_manager)
+    else:
+        console.print("[red]未配置任何数据源 (mcp_servers)，请先在 config.yaml 中配置数据源。[/red]")
+        return
+
+    # Build tools
+    all_tools = (
+        data_tools.TOOL_DEFINITIONS
+        + rule_tools.TOOL_DEFINITIONS
+        + context_tools.TOOL_DEFINITIONS
+        + alert_tools.TOOL_DEFINITIONS
+        + health_tools.TOOL_DEFINITIONS
+        + report_tools.TOOL_DEFINITIONS
+        + usage_tools.TOOL_DEFINITIONS
+    )
+    all_executors = {
+        **data_tools.TOOL_EXECUTORS,
+        **rule_tools.TOOL_EXECUTORS,
+        **context_tools.TOOL_EXECUTORS,
+        **alert_tools.TOOL_EXECUTORS,
+        **health_tools.TOOL_EXECUTORS,
+        **report_tools.TOOL_EXECUTORS,
+        **usage_tools.TOOL_EXECUTORS,
+    }
+
+    # Build business context
+    biz_context = ""
+    try:
+        from order_guard.tools.context_tools import build_context_injection
+        biz_context = await build_context_injection()
+    except Exception:
+        pass
+
+    system_prompt = build_unified_prompt(biz_context)
+
+    console.print("[dim]正在扫描数据源并生成规则建议...[/dim]\n")
+
+    agent = Agent(
+        llm_client=LLMClient(),
+        data_access_layer=data_access_layer,
+        config=AgentConfig(inject_business_context=False),
+        tools=all_tools,
+        tool_executors=all_executors,
+    )
+
+    result = await agent.run_unified(
+        user_message=INIT_RULES_PROMPT,
+        system_prompt=system_prompt,
+    )
+
+    # Show Agent's response (tools execute directly)
+    console.print(result.response)
+
+    # Cleanup
     if mcp_manager:
         await mcp_manager.disconnect_all()
 
@@ -181,6 +283,106 @@ async def _rules_list():
         table.add_row(r.id, r.name, r.mcp_server, enabled)
 
     console.print(table)
+
+
+@rules_app.command("create")
+def rules_create(
+    description: str = typer.Argument(help="用自然语言描述监控规则，例如：'监控日销量下降超过30%的SKU，每天早上9点检查'"),
+):
+    """通过自然语言创建监控规则"""
+    asyncio.run(_rules_create(description))
+
+
+async def _rules_create(description: str):
+    from order_guard.engine.agent import Agent, AgentConfig, AgentResult
+    from order_guard.engine.llm_client import LLMClient
+    from order_guard.storage.database import init_db, reset_engine
+    from order_guard.tools import rule_tools, context_tools, alert_tools, data_tools, health_tools, report_tools, usage_tools
+
+    reset_engine()
+    await init_db()
+
+    # Try to initialize DAL for schema access
+    data_access_layer = None
+    try:
+        from order_guard.config import get_settings
+        settings = get_settings()
+        if settings.mcp_servers:
+            from order_guard.mcp import MCPManager
+            from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
+            mcp_configs = [MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers]
+            mcp_manager = MCPManager(mcp_configs)
+            await mcp_manager.connect_all()
+            from order_guard.data_access import DataAccessLayer
+            data_access_layer = DataAccessLayer(mcp_manager, mcp_configs)
+            await data_access_layer.initialize()
+            data_tools.configure(data_access_layer=data_access_layer)
+            rule_tools.configure(data_access_layer=data_access_layer, mcp_manager=mcp_manager)
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not initialize data access layer: {e}[/yellow]")
+
+    all_tools = (
+        data_tools.TOOL_DEFINITIONS
+        + rule_tools.TOOL_DEFINITIONS
+        + context_tools.TOOL_DEFINITIONS
+        + alert_tools.TOOL_DEFINITIONS
+        + health_tools.TOOL_DEFINITIONS
+        + report_tools.TOOL_DEFINITIONS
+        + usage_tools.TOOL_DEFINITIONS
+    )
+    all_executors = {
+        **data_tools.TOOL_EXECUTORS,
+        **rule_tools.TOOL_EXECUTORS,
+        **context_tools.TOOL_EXECUTORS,
+        **alert_tools.TOOL_EXECUTORS,
+        **health_tools.TOOL_EXECUTORS,
+        **report_tools.TOOL_EXECUTORS,
+        **usage_tools.TOOL_EXECUTORS,
+    }
+
+    llm_client = LLMClient()
+    agent = Agent(
+        llm_client=llm_client,
+        tools=all_tools,
+        tool_executors=all_executors,
+        config=AgentConfig(inject_business_context=False),
+    )
+
+    result = await agent.run_unified(description)
+    console.print(result.response)
+
+
+@rules_app.command("delete")
+def rules_delete(rule_id: str = typer.Argument(help="规则 ID")):
+    """删除规则"""
+    asyncio.run(_rules_delete(rule_id))
+
+
+async def _rules_delete(rule_id: str):
+    from order_guard.engine.rules import RuleManager
+    from order_guard.storage.database import init_db, reset_engine
+
+    reset_engine()
+    await init_db()
+
+    rm = RuleManager()
+    await rm.sync_rules_to_db()
+    rule = await rm.get_rule(rule_id)
+
+    if rule is None:
+        console.print(f"[red]Rule not found: {rule_id}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"Rule: {rule.name} ({rule.id})")
+    confirm = typer.confirm("确认删除？")
+    if confirm:
+        deleted = await rm.delete_rule(rule_id)
+        if deleted:
+            console.print(f"[green]Deleted: {rule.name}[/green]")
+        else:
+            console.print(f"[red]Failed to delete[/red]")
+    else:
+        console.print("[yellow]已取消[/yellow]")
 
 
 @rules_app.command("show")
@@ -296,8 +498,8 @@ async def _queries(last: int, rule: str | None, status_filter: str | None, stats
                 func.avg(QueryLog.duration_ms),
                 func.avg(QueryLog.rows_returned),
             )
-            result = await session.exec(stmt)
-            row = result.first()
+            result = await session.execute(stmt)
+            row = result.one_or_none()
             if row:
                 total, success, avg_dur, avg_rows = row
                 total = total or 0
@@ -319,8 +521,8 @@ async def _queries(last: int, rule: str | None, status_filter: str | None, stats
             statuses = [s.strip() for s in status_filter.split(",")]
             stmt = stmt.where(QueryLog.status.in_(statuses))
 
-        result = await session.exec(stmt)
-        logs = result.all()
+        result = await session.execute(stmt)
+        logs = result.scalars().all()
 
     if not logs:
         console.print("[yellow]No query logs found[/yellow]")
@@ -350,6 +552,219 @@ async def _queries(last: int, rule: str | None, status_filter: str | None, stats
         )
 
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# reports
+# ---------------------------------------------------------------------------
+
+reports_app = typer.Typer(help="报告管理")
+app.add_typer(reports_app, name="reports")
+
+
+@reports_app.command("list")
+def reports_list():
+    """列出所有报告配置"""
+    asyncio.run(_reports_list())
+
+
+async def _reports_list():
+    from order_guard.config import get_settings
+    from order_guard.engine.reporter import ReportManager
+    from order_guard.storage.database import init_db, reset_engine
+
+    reset_engine()
+    await init_db()
+
+    settings = get_settings()
+    mgr = ReportManager()
+    if settings.reports:
+        report_defs = [r.model_dump() for r in settings.reports]
+        await mgr.sync_reports_to_db(report_defs)
+
+    reports = await mgr.list_reports()
+
+    if not reports:
+        console.print("[yellow]No reports configured[/yellow]")
+        return
+
+    table = Table(title="Report Configurations")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name")
+    table.add_column("Schedule")
+    table.add_column("MCP Server")
+    table.add_column("Enabled", justify="center")
+
+    for r in reports:
+        enabled = "[green]✓[/green]" if r.enabled else "[red]✗[/red]"
+        table.add_row(r.id, r.name, r.schedule, r.mcp_server, enabled)
+
+    console.print(table)
+
+
+@reports_app.command("run")
+def reports_run(
+    report: str = typer.Option(..., "--report", "-r", help="报告 ID"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只生成不推送"),
+):
+    """手动触发报告生成"""
+    asyncio.run(_reports_run(report_id=report, dry_run=dry_run))
+
+
+async def _reports_run(report_id: str, dry_run: bool):
+    from order_guard.config import get_settings
+    from order_guard.engine.reporter import ReportManager, generate_report, push_report
+    from order_guard.storage.database import init_db, reset_engine
+
+    reset_engine()
+    await init_db()
+
+    settings = get_settings()
+    mgr = ReportManager()
+    if settings.reports:
+        report_defs = [r.model_dump() for r in settings.reports]
+        await mgr.sync_reports_to_db(report_defs)
+
+    report = await mgr.get_report(report_id)
+    if not report:
+        console.print(f"[red]Report not found: {report_id}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"Generating report: {report.name}{'  [DRY RUN]' if dry_run else ''}...")
+
+    # Initialize MCP + DAL if available
+    mcp_manager = None
+    data_access_layer = None
+    if settings.mcp_servers:
+        from order_guard.mcp import MCPManager
+        from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
+        mcp_configs = [MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers]
+        mcp_manager = MCPManager(mcp_configs)
+        await mcp_manager.connect_all()
+        from order_guard.data_access import DataAccessLayer
+        data_access_layer = DataAccessLayer(mcp_manager, mcp_configs)
+        await data_access_layer.initialize()
+
+    result = await generate_report(
+        report,
+        data_access_layer=data_access_layer,
+        mcp_manager=mcp_manager,
+    )
+
+    # Save history
+    await mgr.save_history(
+        report_id=report_id,
+        content=result["content"],
+        status=result["status"],
+        token_usage=result.get("token_usage", 0),
+        duration_ms=result.get("duration_ms", 0),
+        error=result.get("error"),
+    )
+
+    if result["status"] == "success":
+        console.print(f"\n[bold]Report: {report.name}[/bold]")
+        console.print(result["content"])
+        console.print(f"\n[dim]Duration: {result['duration_ms']}ms[/dim]")
+
+        if not dry_run:
+            pushed = await push_report(report, result["content"])
+            if pushed:
+                console.print("[green]Report pushed successfully[/green]")
+            else:
+                console.print("[red]Report push failed[/red]")
+    else:
+        console.print(f"[red]Report generation failed: {result.get('error', 'Unknown error')}[/red]")
+
+    if mcp_manager:
+        await mcp_manager.disconnect_all()
+
+
+# ---------------------------------------------------------------------------
+# sessions
+# ---------------------------------------------------------------------------
+
+sessions_app = typer.Typer(help="会话管理")
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.command("list")
+def sessions_list(
+    user_id: str = typer.Option("cli", "--user", "-u", help="用户 ID"),
+    limit: int = typer.Option(20, "--limit", "-n", help="显示条数"),
+):
+    """列出用户会话"""
+    asyncio.run(_sessions_list(user_id=user_id, limit=limit))
+
+
+async def _sessions_list(user_id: str, limit: int):
+    from order_guard.api.session import SessionManager
+    from order_guard.storage.database import init_db, reset_engine
+
+    reset_engine()
+    await init_db()
+
+    mgr = SessionManager()
+    sessions = await mgr.list_sessions(user_id, limit=limit)
+
+    if not sessions:
+        console.print("[yellow]No sessions found[/yellow]")
+        return
+
+    table = Table(title=f"Sessions for {user_id}")
+    table.add_column("ID", style="cyan")
+    table.add_column("Title")
+    table.add_column("Active", justify="center")
+    table.add_column("Messages", justify="right")
+    table.add_column("Updated", style="dim")
+
+    for s in sessions:
+        msg_count = await mgr.get_message_count(s.id)
+        active = "[green]✓[/green]" if s.is_active else ""
+        table.add_row(
+            s.id[:8],
+            s.title,
+            active,
+            str(msg_count),
+            s.updated_at.strftime("%Y-%m-%d %H:%M"),
+        )
+
+    console.print(table)
+
+
+@sessions_app.command("delete")
+def sessions_delete(
+    session_id: str = typer.Argument(help="会话 ID（前8位即可）"),
+    user_id: str = typer.Option("cli", "--user", "-u", help="用户 ID"),
+):
+    """删除指定会话"""
+    asyncio.run(_sessions_delete(session_id=session_id, user_id=user_id))
+
+
+async def _sessions_delete(session_id: str, user_id: str):
+    from order_guard.api.session import SessionManager
+    from order_guard.storage.database import init_db, reset_engine
+
+    reset_engine()
+    await init_db()
+
+    mgr = SessionManager()
+    sessions = await mgr.list_sessions(user_id, limit=100)
+
+    target = None
+    for s in sessions:
+        if s.id.startswith(session_id):
+            target = s
+            break
+
+    if not target:
+        console.print(f"[red]Session not found: {session_id}[/red]")
+        raise typer.Exit(1)
+
+    deleted = await mgr.delete_session(target.id)
+    if deleted:
+        console.print(f"[green]Deleted session: {target.title} ({target.id[:8]})[/green]")
+    else:
+        console.print(f"[red]Failed to delete session[/red]")
 
 
 # ---------------------------------------------------------------------------

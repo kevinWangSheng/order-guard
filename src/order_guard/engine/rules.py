@@ -16,7 +16,13 @@ from order_guard.storage.crud import create, get_by_id, list_all, update
 class RuleManager:
     """Manage alert rules — YAML loading and DB operations."""
 
-    def __init__(self, rules_file: str = "rules.yaml"):
+    def __init__(self, rules_file: str | None = None):
+        if rules_file is None:
+            try:
+                from order_guard.config import get_settings
+                rules_file = get_settings().rules_file
+            except Exception:
+                rules_file = "rules.yaml"
         self._rules_file = rules_file
 
     # ------------------------------------------------------------------
@@ -103,3 +109,13 @@ class RuleManager:
 
     async def toggle_rule(self, rule_id: str, enabled: bool) -> AlertRule | None:
         return await self.update_rule(rule_id, enabled=enabled)
+
+    async def delete_rule(self, rule_id: str) -> bool:
+        """Delete a rule from the database."""
+        async with get_session() as session:
+            rule = await get_by_id(session, AlertRule, rule_id)
+            if rule is None:
+                return False
+            await session.delete(rule)
+            await session.flush()
+            return True
