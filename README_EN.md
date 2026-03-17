@@ -44,37 +44,30 @@ No SQL needed. No ERP dashboard login. Just @mention the bot in your chat group.
 
 ## Features
 
-### Implemented
-
-| Feature | Description | Version |
-|---------|-------------|---------|
-| **Unified AI Agent** | 19 tools, one agent handles everything (queries, rules, alerts, reports) | v4 |
-| **Multi-database support** | MySQL / PostgreSQL / SQLite via MCP protocol, multi-DB concurrent queries | v3 |
-| **Natural language queries** | Describe your need → AI generates SQL → queries → returns analysis | v2 |
-| **Chat-based rule config** | Describe monitoring needs → AI understands schema → generates rules → user confirms | v4 |
-| **Scheduled anomaly detection** | Cron-scheduled rules → AI analyzes data → auto-push alerts on anomalies | v1 |
-| **Feishu Bot** | @bot to query data, manage rules, view alerts; multi-turn conversations | v3 |
-| **Alert push** | Feishu message cards / generic webhook, with dedup, silence window, batch merge | v2 |
-| **Scheduled reports** | Auto-generated daily/weekly reports with customizable sections and KPIs | v4 |
-| **Schema anti-hallucination** | Auto-inject table schemas into AI context, sensitive table/column blocklist | v3 |
-| **Query audit** | Log all AI-executed SQL queries, traceable and queryable | v3 |
-| **LLM usage tracking** | Token consumption, cost estimation, grouped by rule/model | v5 |
-| **Datasource health monitoring** | Periodic health checks, auto-alert on consecutive failures, 24h uptime stats | v5 |
-| **Alert lifecycle** | Mark alerts as handled/ignored/false-positive, stats dashboard | v5 |
-| **Rule effectiveness** | Trigger count, false positive rate, execution success rate, tuning suggestions | v5 |
-| **Business context injection** | Configure company-specific context to improve AI analysis accuracy | v4 |
-| **CLI management** | 15+ commands covering rules, alerts, reports, sessions, query audit | v1 |
-| **Docker deployment** | Dockerfile + docker-compose.yml, ready to deploy | v1 |
-
-### Planned
-
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Feishu Docs MCP | Auto-sync business context from Feishu spreadsheets/docs | Planned |
-| Google Sheets MCP | Read promotion calendars, stocking plans from operational spreadsheets | Planned |
-| WeCom Bot | Reuse unified Agent for WeChat Work bidirectional chat | Planned |
-| Web Dashboard | Visual dashboard for rules, alerts, and system status | Planned |
-| Multi-Agent collaboration | Cross-datasource joint analysis | Planned |
+| Unified AI Agent | 19 tools, one agent handles everything (queries, rules, alerts, reports) | ✅ Done |
+| Multi-database support | MySQL / PostgreSQL / SQLite via MCP protocol, multi-DB concurrent queries | ✅ Done |
+| Natural language queries | Describe your need → AI generates SQL → queries → returns analysis | ✅ Done |
+| Chat-based rule config | Describe monitoring needs → AI understands schema → generates rules → user confirms | ✅ Done |
+| Scheduled anomaly detection | Cron-scheduled rules → AI analyzes data → auto-push alerts on anomalies | ✅ Done |
+| Feishu Bot | @bot to query data, manage rules, view alerts; multi-turn conversations | ✅ Done |
+| Alert push | Feishu message cards / generic webhook, with dedup, silence window, batch merge | ✅ Done |
+| Scheduled reports | Auto-generated daily/weekly reports with customizable sections and KPIs | ✅ Done |
+| Schema anti-hallucination | Auto-inject table schemas into AI context, sensitive table/column blocklist | ✅ Done |
+| Query audit | Log all AI-executed SQL queries, traceable and queryable | ✅ Done |
+| LLM usage tracking | Token consumption, cost estimation, grouped by rule/model | ✅ Done |
+| Datasource health monitoring | Periodic health checks, auto-alert on consecutive failures, 24h uptime stats | ✅ Done |
+| Alert lifecycle | Mark alerts as handled/ignored/false-positive, stats dashboard | ✅ Done |
+| Rule effectiveness | Trigger count, false positive rate, execution success rate, tuning suggestions | ✅ Done |
+| Business context injection | Configure company-specific context to improve AI analysis accuracy | ✅ Done |
+| CLI management | 15+ commands covering rules, alerts, reports, sessions, query audit | ✅ Done |
+| Docker deployment | Dockerfile + docker-compose.yml, ready to deploy | ✅ Done |
+| Feishu Docs MCP | Auto-sync business context from Feishu spreadsheets/docs | 📋 Planned |
+| Google Sheets MCP | Read promotion calendars, stocking plans from operational spreadsheets | 📋 Planned |
+| WeCom Bot | Reuse unified Agent for WeChat Work bidirectional chat | 📋 Planned |
+| Web Dashboard | Visual dashboard for rules, alerts, and system status | 📋 Planned |
+| Multi-Agent collaboration | Cross-datasource joint analysis | 📋 Planned |
 
 ---
 
