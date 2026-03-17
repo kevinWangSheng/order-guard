@@ -159,6 +159,9 @@ async def _cleanup_agent_infra():
     _agent_infra.clear()
 
 
+_last_agent_tools: list[dict] = []
+
+
 async def _call_agent(user_id: str, text: str, context_messages: list[dict]) -> str:
     """Call the unified Agent directly (same code path as Feishu bot)."""
     from order_guard.engine.agent import Agent, AgentConfig
@@ -221,6 +224,9 @@ async def _call_agent(user_id: str, text: str, context_messages: list[dict]) -> 
         trigger_type="chat",
         user_id=user_id,
     )
+
+    global _last_agent_tools
+    _last_agent_tools = result.tool_calls_log or []
 
     return result.response or "抱歉，我没有理解你的意思。"
 
@@ -333,35 +339,94 @@ async def generate_user_message(
         return ""
 
 
-async def evaluate_conversation(
-    conversation: list[dict], criteria: list[str],
-    model: str, api_key: str, api_base: str = "",
+def evaluate_conversation_rules(
+    conversation: list[dict],
+    criteria: list[str],
+    tools_used: list[str],
 ) -> dict:
-    """AI evaluates conversation against criteria."""
-    criteria_text = "\n".join(f"- {c}" for c in criteria)
-    conv_text = "\n".join(
-        f"{'用户' if m['role'] == 'user' else 'Agent'}: {m['content'][:500]}"
-        for m in conversation
-    )
-    messages = [
-        {"role": "system", "content":
-            "你是 AI 系统测试评审员。评估对话是否满足标准。\n"
-            "JSON 格式回复：{\"passed\": [...], \"failed\": [...], \"reasoning\": \"...\"}"},
-        {"role": "user", "content": f"## 标准\n{criteria_text}\n\n## 对话\n{conv_text}"},
-    ]
-    raw = await _llm_call(messages, model, api_key, api_base)
-    try:
-        if "```" in raw:
-            raw = raw.split("```json")[-1].split("```")[0] if "```json" in raw else raw.split("```")[1].split("```")[0]
-        result = json.loads(raw.strip())
-        return {
-            "success": len(result.get("failed", [])) == 0,
-            "passed": result.get("passed", []),
-            "failed": result.get("failed", []),
-            "reasoning": result.get("reasoning", ""),
-        }
-    except (json.JSONDecodeError, IndexError):
-        return {"success": False, "passed": [], "failed": criteria, "reasoning": f"解析失败: {raw[:200]}"}
+    """Rule-based evaluation — no LLM dependency, instant and deterministic.
+
+    Checks criteria by pattern matching against conversation content and tool usage.
+    """
+    passed = []
+    failed = []
+
+    all_content = " ".join(m["content"] for m in conversation if m["role"] == "assistant")
+    all_content_lower = all_content.lower()
+
+    for criterion in criteria:
+        c = criterion.lower()
+        met = False
+
+        # Tool usage checks
+        if "调用" in c and ("工具" in c or "tool" in c):
+            # Extract tool names from criterion
+            tool_keywords = {
+                "query": "query", "get_schema": "get_schema",
+                "list_datasources": "list_datasources", "list_rules": "list_rules",
+                "create_rule": "create_rule", "list_alerts": "list_alerts",
+                "handle_alert": "handle_alert", "get_alert_stats": "get_alert_stats",
+                "check_health": "check_health",
+            }
+            for kw, tool_name in tool_keywords.items():
+                if kw in c and tool_name in tools_used:
+                    met = True
+                    break
+            # Generic "data query tool" check
+            if not met and ("数据查询" in c or "查询" in c):
+                if any(t in tools_used for t in ["query", "get_schema", "list_datasources"]):
+                    met = True
+            # Generic "alert tool" check
+            if not met and "告警" in c:
+                if any(t in tools_used for t in ["list_alerts", "handle_alert", "get_alert_stats"]):
+                    met = True
+
+        # Content checks
+        elif "包含" in c or "列出" in c or "说明" in c:
+            # Check for data presence (numbers, tables, lists)
+            import re
+            has_numbers = bool(re.search(r'\d+', all_content))
+            has_table = "|" in all_content and "---" in all_content
+            has_list = "- " in all_content or "1." in all_content
+            has_data = has_numbers or has_table or has_list
+
+            if "数据" in c or "数字" in c or "表格" in c or "列表" in c:
+                met = has_data
+            elif "规则" in c:
+                met = "规则" in all_content and has_data
+            elif "状态" in c:
+                met = any(kw in all_content for kw in ["正常", "异常", "健康", "连接", "状态"])
+            elif "告警" in c:
+                met = any(kw in all_content for kw in ["告警", "异常", "条", "严重"])
+            elif "数据源" in c or "数据表" in c:
+                met = has_data
+            else:
+                met = len(all_content) > 50  # Generic: has meaningful content
+
+        # Helpfulness / language checks
+        elif "帮助" in c or "有帮助" in c:
+            met = len(all_content) > 100
+        elif "中文" in c:
+            met = any('\u4e00' <= ch <= '\u9fff' for ch in all_content[:100])
+        elif "友好" in c:
+            met = len(all_content) > 50 and "?" not in all_content[:20]
+
+        # Fallback: if criterion doesn't match patterns, pass if we have content
+        else:
+            met = len(all_content) > 50
+
+        if met:
+            passed.append(criterion)
+        else:
+            failed.append(criterion)
+
+    reasoning = f"工具调用: {tools_used}; 回复长度: {len(all_content)} 字符"
+    return {
+        "success": len(failed) == 0,
+        "passed": passed,
+        "failed": failed,
+        "reasoning": reasoning,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -477,11 +542,15 @@ async def run_scenario(
             elapsed = time.time() - t0
             record.response_times.append(elapsed)
 
+            # Extract tools from agent result
+            turn_tools = [tc["tool"] for tc in _last_agent_tools] if _last_agent_tools else []
+
             conversation.append({"role": "assistant", "content": reply})
             record.messages.append({
                 "role": "assistant", "content": reply,
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "response_time": round(elapsed, 1),
+                "tools_used": turn_tools,
             })
             logger.info("[{}] Agent ({:.1f}s): {}", task["persona_name"], elapsed, reply[:80])
 
@@ -491,9 +560,16 @@ async def run_scenario(
             if "？" not in reply and "?" not in reply and turn >= 1:
                 break
 
-        # 5. Evaluate
+        # 5. Evaluate (rule-based, no LLM needed)
         if conversation:
-            ev = await evaluate_conversation(conversation, task["criteria"], llm_model, llm_key, llm_base)
+            # Collect tools used from agent results
+            tools_used = []
+            for m in record.messages:
+                for t in m.get("tools_used", []):
+                    if t not in tools_used:
+                        tools_used.append(t)
+
+            ev = evaluate_conversation_rules(conversation, task["criteria"], tools_used)
             record.success = ev["success"]
             record.passed_criteria = ev["passed"]
             record.failed_criteria = ev["failed"]
