@@ -1,0 +1,100 @@
+# 场景测试角色与任务定义
+# 角色定义 → AI 模拟用户 → 自动和 Agent 多轮对话 → 按 criteria 评判通过/失败
+
+defaults:
+  max_turns: 10
+
+roles:
+  - id: operations
+    name: 电商运营
+    description: 负责日常商品销售监控、库存管理的运营人员。不懂 SQL，习惯自然语言描述需求。
+    personas:
+      - id: experienced
+        name: 老运营
+        traits: 做事直接，喜欢看数字，会追问细节，偶尔用简写和口语。
+      - id: newbie
+        name: 实习生
+        traits: 第一次用这个系统，会问比较基础的问题，需要引导。
+    tasks:
+      - id: query_inventory
+        name: 查库存异常
+        goal: 找出库存低于安全线的商品，了解哪些 SKU 有缺货风险
+        criteria:
+          - Agent 调用了 query 工具查询库存数据
+          - 返回结果中包含具体的 SKU 编号
+          - 提到了库存数量或缺货相关信息
+      - id: query_orders
+        name: 查订单数据
+        goal: 了解当前待处理订单的数量和金额
+        criteria:
+          - Agent 调用了数据查询工具（query 或 get_schema）
+          - 返回了订单相关的数字信息
+      - id: create_rule
+        name: 创建监控规则
+        goal: 创建一个定时检查库存的监控规则
+        criteria:
+          - Agent 调用了 create_rule 工具
+          - 回复中确认规则已创建
+
+  - id: manager
+    name: 管理层
+    description: 公司管理层，关注整体经营指标和异常情况，不关心技术细节，提问比较概括。
+    personas:
+      - id: ceo
+        name: 王总
+        traits: 说话简洁，直接问结果，不想听过程。比如"最近有什么异常""生意怎么样"。
+    tasks:
+      - id: check_alerts
+        name: 查看告警
+        goal: 了解最近有什么异常告警，是否有需要关注的问题
+        criteria:
+          - Agent 调用了 list_alerts 工具
+          - 返回了告警相关信息（严重程度、数量或具体告警内容）
+      - id: business_overview
+        name: 经营概览
+        goal: 大致了解最近的经营数据（销售、库存等）
+        criteria:
+          - Agent 调用了 query 工具
+          - 回复包含数据分析或业务指标
+
+  - id: admin
+    name: 系统管理员
+    description: 负责系统配置和规则管理的管理员，做事严谨，按流程操作。
+    personas:
+      - id: sysadmin
+        name: 陈管理员
+        traits: 喜欢确认操作结果，会追问执行状态。
+    tasks:
+      - id: manage_rules
+        name: 管理规则
+        goal: 查看当前所有监控规则的状态
+        criteria:
+          - Agent 调用了 list_rules 工具
+          - 返回了规则列表信息
+      - id: handle_alert
+        name: 处理告警
+        goal: 查看未处理的告警并标记为已处理
+        criteria:
+          - Agent 调用了告警相关工具（list_alerts、handle_alert 或 get_alert_stats 均可）
+          - 回复中包含告警相关信息（数量、状态或处理结果）
+      - id: check_health
+        name: 系统健康检查
+        goal: 检查系统各数据源是否正常运行
+        criteria:
+          - Agent 调用了 check_health 工具
+          - 返回了数据源状态信息
+
+  - id: first_time_user
+    name: 新手用户
+    description: 完全不了解这个系统，第一次使用，需要探索功能。
+    personas:
+      - id: curious
+        name: 好奇新人
+        traits: 会先问系统能做什么，然后尝试简单操作，可能会问一些系统不支持的功能。
+    tasks:
+      - id: explore
+        name: 探索系统
+        goal: 了解系统能做什么，尝试查询一些数据
+        criteria:
+          - Agent 使用了 list_datasources 或 get_schema 或 query 中的至少一个工具
+          - 回复对用户有帮助，引导用户了解系统功能

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -823,6 +824,125 @@ async def _status():
     console.print(f"\n[bold]Recent Alerts:[/bold] ({len(alerts)} shown)")
     for a in alerts:
         console.print(f"  {a.created_at.strftime('%m-%d %H:%M')} [{a.severity}] {a.title}")
+
+
+# ---------------------------------------------------------------------------
+# test-scenarios
+# ---------------------------------------------------------------------------
+
+@app.command("test-scenarios")
+def test_scenarios(
+    push_feishu: bool = typer.Option(False, "--push-feishu", help="推送结果到飞书群"),
+    role: Optional[str] = typer.Option(None, "--role", help="过滤角色 (ID 或名称)"),
+    task: Optional[str] = typer.Option(None, "--task", help="过滤任务 (ID 或名称)"),
+    max_turns: int = typer.Option(10, "--max-turns", help="最大对话轮数"),
+    verbose: bool = typer.Option(False, "--verbose", "-V", help="显示详细输出"),
+    webhook_url: Optional[str] = typer.Option(None, "--webhook-url", help="飞书 Webhook URL (默认从配置读取)"),
+):
+    """运行 AI 场景测试 — 基于角色/人设自动模拟用户对话"""
+    asyncio.run(_test_scenarios_impl(push_feishu, role, task, max_turns, verbose, webhook_url))
+
+
+async def _test_scenarios_impl(
+    push_feishu: bool,
+    role_filter: str | None,
+    task_filter: str | None,
+    max_turns: int,
+    verbose: bool,
+    webhook_url: str | None,
+):
+    import sys
+    # Ensure tests/ is importable
+    project_root = Path(__file__).resolve().parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    from tests.scenarios.persona_runner import (
+        PERSONAS_YAML,
+        format_terminal_table,
+        load_personas,
+        filter_tasks,
+        push_feishu_report,
+        run_single_scenario,
+        save_json_report,
+        setup_test_infrastructure,
+        teardown_test_infrastructure,
+    )
+
+    # Load and filter tasks
+    all_tasks, _ = load_personas(PERSONAS_YAML)
+    tasks = filter_tasks(all_tasks, role_filter, task_filter)
+
+    if not tasks:
+        console.print("[yellow]没有匹配的场景[/yellow]")
+        if role_filter:
+            console.print(f"  --role={role_filter}")
+        if task_filter:
+            console.print(f"  --task={task_filter}")
+        console.print("\n可用角色:")
+        seen = set()
+        for t in all_tasks:
+            key = (t.role_id, t.role_name)
+            if key not in seen:
+                seen.add(key)
+                console.print(f"  {t.role_id} ({t.role_name})")
+        raise typer.Exit(1)
+
+    # Override max_turns if specified
+    if max_turns != 10:
+        for t in tasks:
+            t.max_turns = max_turns
+
+    console.print(f"[bold]场景测试[/bold]: {len(tasks)} 个场景待运行\n")
+
+    # Setup test infrastructure
+    console.print("[dim]初始化测试环境...[/dim]")
+    try:
+        await setup_test_infrastructure()
+    except Exception as e:
+        console.print(f"[red]初始化失败: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Run scenarios
+    results = []
+    try:
+        for i, task in enumerate(tasks):
+            label = f"{task.role_name}/{task.persona_name}/{task.task_name}"
+            console.print(f"[{i+1}/{len(tasks)}] {label} ...", end=" ")
+
+            r = await run_single_scenario(task, verbose=verbose)
+            results.append(r)
+
+            if r.success:
+                console.print(f"[green]✅ PASS[/green] ({r.turns} 轮, {r.total_time:.1f}s)")
+            elif r.error:
+                console.print(f"[red]❌ ERROR[/red] ({r.error[:60]})")
+            else:
+                console.print(f"[red]❌ FAIL[/red] ({r.turns} 轮, {r.total_time:.1f}s)")
+    finally:
+        await teardown_test_infrastructure()
+
+    # Output: terminal table
+    console.print()
+    console.print(format_terminal_table(results))
+
+    # Output: JSON report
+    report_path = save_json_report(results)
+    console.print(f"\n[dim]报告已保存: {report_path}[/dim]")
+
+    # Output: Feishu push
+    if push_feishu:
+        console.print("[dim]推送结果到飞书...[/dim]")
+        try:
+            await push_feishu_report(results, webhook_url)
+            console.print("[green]飞书推送成功[/green]")
+        except Exception as e:
+            console.print(f"[red]飞书推送失败: {e}[/red]")
+
+    # Exit code
+    passed = sum(1 for r in results if r.success)
+    if passed < len(results):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

@@ -36,3 +36,4 @@ logs/
 # 本地文档
 .local/
 .claude/worktrees/
+tests/scenarios/reports/*.json
