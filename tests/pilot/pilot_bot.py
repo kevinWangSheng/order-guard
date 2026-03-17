@@ -783,12 +783,11 @@ async def run_pilot(
     finally:
         # Flush LangWatch traces before cleanup
         try:
-            import langwatch
-            if hasattr(langwatch, '_tracer_provider') and langwatch._tracer_provider:
-                langwatch._tracer_provider.force_flush(timeout_millis=5000)
-                logger.info("LangWatch traces flushed")
-        except Exception:
-            pass
+            from langwatch.client import get_instance
+            get_instance().tracer_provider.force_flush(timeout_millis=10000)
+            logger.info("LangWatch traces flushed")
+        except Exception as e:
+            logger.debug("LangWatch flush skipped: {}", e)
         await _cleanup_agent_infra()
 
     return all_records
