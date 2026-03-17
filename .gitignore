@@ -37,3 +37,4 @@ logs/
 .local/
 .claude/worktrees/
 tests/scenarios/reports/*.json
+tests/pilot/reports/*.json

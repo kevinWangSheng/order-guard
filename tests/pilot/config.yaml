@@ -1,0 +1,25 @@
+# TestPilot 配置
+# 模拟用户通过 HTTP 接口与 OrderGuard 对话，本地闭环测试
+
+# OrderGuard 服务地址
+orderguard_url: "http://localhost:8000"
+
+# LLM 配置（留空则复用 OrderGuard 的 .env 配置）
+llm:
+  model: ""
+  api_key: ""
+  api_base: ""
+
+# 测试策略
+strategy:
+  mode: "sequential"              # sequential: 按顺序 | random: 随机
+  interval_seconds: 3600          # 每轮间隔（秒），默认 1 小时
+  max_turns_per_scenario: 5       # 每个场景最多对话轮数
+  reply_timeout_seconds: 60       # 等待 OrderGuard 回复超时
+  total_rounds: 0                 # 总轮数，0=无限循环
+
+# 角色定义文件（默认复用 scenarios/personas.yaml）
+personas_file: ""
+
+# 报告推送到飞书 Webhook（留空不推送）
+feishu_webhook_url: "${OG_FEISHU_WEBHOOK_URL}"

@@ -18,6 +18,8 @@ from order_guard import __version__
 app = typer.Typer(name="order-guard", help="OrderGuard — 企业数据智能监控中台")
 rules_app = typer.Typer(help="规则管理")
 app.add_typer(rules_app, name="rules")
+pilot_app = typer.Typer(help="TestPilot — 飞书群自动化测试")
+app.add_typer(pilot_app, name="pilot")
 
 console = Console()
 
@@ -824,6 +826,81 @@ async def _status():
     console.print(f"\n[bold]Recent Alerts:[/bold] ({len(alerts)} shown)")
     for a in alerts:
         console.print(f"  {a.created_at.strftime('%m-%d %H:%M')} [{a.severity}] {a.title}")
+
+
+# ---------------------------------------------------------------------------
+# pilot — 飞书群自动化测试
+# ---------------------------------------------------------------------------
+
+@pilot_app.command("start")
+def pilot_start(
+    once: bool = typer.Option(False, "--once", help="只跑一轮"),
+    role: Optional[str] = typer.Option(None, "--role", help="过滤角色"),
+    task: Optional[str] = typer.Option(None, "--task", help="过滤任务"),
+    config_file: Optional[str] = typer.Option(None, "--config", help="配置文件路径"),
+):
+    """启动 TestPilot — 模拟用户与 OrderGuard 对话"""
+    asyncio.run(_pilot_start_impl(once, role, task, config_file))
+
+
+async def _pilot_start_impl(once, role_filter, task_filter, config_file):
+    import sys
+    project_root = Path(__file__).resolve().parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    from tests.pilot.pilot_bot import load_pilot_config, load_tasks, run_pilot
+
+    config_path = Path(config_file) if config_file else None
+    config = load_pilot_config(config_path)
+
+    tasks = load_tasks(config)
+    if role_filter:
+        tasks = [t for t in tasks if role_filter in (t["role_id"], t["role_name"])]
+    if task_filter:
+        tasks = [t for t in tasks if task_filter in (t["task_id"], t["task_name"])]
+
+    console.print(f"[bold]TestPilot[/bold]: {len(tasks)} 个场景")
+    console.print(f"  目标: {config.orderguard_url}")
+    console.print(f"  模式: {config.mode} | 间隔: {config.interval_seconds}s")
+    console.print(f"  每场景最多 {config.max_turns_per_scenario} 轮对话")
+    if once:
+        console.print("  [dim]单次运行模式[/dim]")
+    console.print()
+
+    results = await run_pilot(config, once=once, role_filter=role_filter, task_filter=task_filter)
+
+    if results:
+        passed = sum(1 for r in results if r.success)
+        console.print(f"\n[bold]结果: {passed}/{len(results)} 通过[/bold]")
+        if passed < len(results):
+            raise typer.Exit(1)
+
+
+@pilot_app.command("list")
+def pilot_list():
+    """列出所有可用的测试角色和场景"""
+    import sys
+    project_root = Path(__file__).resolve().parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    from tests.pilot.pilot_bot import load_pilot_config, load_tasks
+
+    config = load_pilot_config()
+    tasks = load_tasks(config)
+
+    table = Table(title="TestPilot 场景列表")
+    table.add_column("角色", style="cyan")
+    table.add_column("人设")
+    table.add_column("场景")
+    table.add_column("目标", max_width=40)
+
+    for t in tasks:
+        table.add_row(t["role_name"], t["persona_name"], t["task_name"], t["task_goal"])
+
+    console.print(table)
+    console.print(f"\n共 {len(tasks)} 个场景")
 
 
 # ---------------------------------------------------------------------------
