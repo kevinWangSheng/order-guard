@@ -123,6 +123,18 @@ async def _ensure_agent_infra():
 
     settings = get_settings()
 
+    # Init LangWatch if configured
+    lw_key = settings.observability.langwatch_api_key.get_secret_value() if hasattr(settings, 'observability') else ""
+    if lw_key:
+        try:
+            import langwatch
+            langwatch.setup(api_key=lw_key)
+            from order_guard.engine.agent import langwatch_init
+            langwatch_init()
+            logger.info("Pilot: LangWatch enabled")
+        except Exception as e:
+            logger.warning("Pilot: LangWatch init failed: {}", e)
+
     # Init DB
     await init_db()
 
@@ -769,6 +781,14 @@ async def run_pilot(
     except KeyboardInterrupt:
         logger.info("TestPilot stopped")
     finally:
+        # Flush LangWatch traces before cleanup
+        try:
+            import langwatch
+            if hasattr(langwatch, '_tracer_provider') and langwatch._tracer_provider:
+                langwatch._tracer_provider.force_flush(timeout_millis=5000)
+                logger.info("LangWatch traces flushed")
+        except Exception:
+            pass
         await _cleanup_agent_infra()
 
     return all_records

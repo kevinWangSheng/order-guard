@@ -1,7 +1,7 @@
 # TestPilot 场景定义 — 面向真实环境
 #
-# messages: 预设的用户消息序列（按顺序发送）
-# criteria: 验证行为模式，不依赖特定数据内容
+# messages: 预设的用户消息序列
+# criteria: 规则匹配验证，不依赖 LLM
 
 defaults:
   max_turns: 5
@@ -15,12 +15,28 @@ roles:
         name: 老运营
         traits: 做事直接，喜欢看数字。
     tasks:
-      - id: query_data
-        name: 查业务数据
-        goal: 查询库存或销售数据
+      - id: query_inventory
+        name: 查库存异常
+        goal: 查询库存数据，找出缺货风险
         messages:
           - "帮我查一下现在库存情况，有没有快缺货的商品？"
           - "具体哪些 SKU 库存最少？列个表给我看看"
+        criteria:
+          - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
+          - 回复中包含具体的数据信息（数字、表格或列表）
+      - id: query_sales
+        name: 查销售数据
+        goal: 查看最近的销售排行
+        messages:
+          - "帮我看看哪些商品卖得最好，列个 Top 10"
+        criteria:
+          - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
+          - 回复中包含具体的数据信息（数字、表格或列表）
+      - id: query_returns
+        name: 查退货数据
+        goal: 查看退货率情况
+        messages:
+          - "最近退货率怎么样？有没有退货率特别高的商品？"
         criteria:
           - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
           - 回复中包含具体的数据信息（数字、表格或列表）
@@ -67,6 +83,14 @@ roles:
         criteria:
           - Agent 调用了 query 工具查询数据
           - 回复中包含数据分析信息
+      - id: pg_query
+        name: 查分析库数据
+        goal: 从 pg-analytics 数据库查数据
+        messages:
+          - "帮我从分析库查一下最近的销售趋势"
+        criteria:
+          - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
+          - 回复中包含具体的数据信息（数字、表格或列表）
 
   - id: admin
     name: 系统管理员
@@ -84,14 +108,14 @@ roles:
         criteria:
           - Agent 调用了 list_rules 工具
           - 回复中包含规则列表
-      - id: system_status
-        name: 系统状态
-        goal: 检查系统健康
+      - id: check_usage
+        name: 查看用量
+        goal: 了解 LLM 用量和成本
         messages:
-          - "检查一下系统状态，数据源都正常吗？"
+          - "最近的 LLM 用量怎么样？花了多少钱？"
         criteria:
-          - Agent 调用了 check_health 或 list_datasources 工具
-          - 回复中包含状态信息
+          - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
+          - 回复中包含具体的数据信息（数字、表格或列表）
 
   - id: first_time
     name: 新手用户
@@ -110,3 +134,11 @@ roles:
         criteria:
           - Agent 的回复对新手有帮助
           - 回复使用中文
+      - id: prod_query
+        name: 查生产库数据
+        goal: 从 mysql-prod 查询订单数据
+        messages:
+          - "帮我从生产库查一下最近的订单情况"
+        criteria:
+          - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
+          - 回复中包含具体的数据信息（数字、表格或列表）
