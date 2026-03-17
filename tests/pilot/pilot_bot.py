@@ -290,7 +290,12 @@ def load_tasks(config: PilotConfig) -> list[dict]:
     """Load persona tasks from YAML."""
     yaml_path = Path(config.personas_file) if config.personas_file else None
     if not yaml_path or not yaml_path.exists():
-        yaml_path = Path(__file__).parent.parent / "scenarios" / "personas.yaml"
+        # Pilot 优先用自己的 personas.yaml（criteria 适配真实环境）
+        pilot_yaml = Path(__file__).parent / "personas.yaml"
+        if pilot_yaml.exists():
+            yaml_path = pilot_yaml
+        else:
+            yaml_path = Path(__file__).parent.parent / "scenarios" / "personas.yaml"
     if not yaml_path.exists():
         raise FileNotFoundError(f"personas.yaml not found: {yaml_path}")
 
