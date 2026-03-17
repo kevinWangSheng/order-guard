@@ -1,9 +1,10 @@
 """TestPilot — 本地自动化测试机器人.
 
-通过 HTTP 接口模拟飞书用户消息，走完整 OrderGuard 生产代码路径，
+直接调用 OrderGuard 内部 Agent（同进程），模拟不同角色用户对话，
 收集回复、AI 评判、定时推送报告。
 
-不需要额外的飞书 Bot 应用。直接 POST 到 localhost:8000/api/feishu/event。
+不需要额外的飞书 Bot 应用，不需要启动 OrderGuard 服务。
+Pilot 自己初始化 MCP 连接和 Agent，走和生产一样的代码路径。
 
 Usage:
     uv run order-guard pilot start          # 启动（每小时一轮）
@@ -103,125 +104,125 @@ class ConversationRecord:
 
 
 # ---------------------------------------------------------------------------
-# Reply collection — hook into OrderGuard's _reply_text
+# Agent infrastructure — initialize once, reuse across scenarios
 # ---------------------------------------------------------------------------
 
-_reply_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
-_original_reply_text = None
+_agent_infra: dict[str, Any] = {}
 
 
-def _install_reply_hook():
-    """Monkey-patch _reply_text to capture replies into a queue."""
-    global _original_reply_text
-    from order_guard.api import feishu
+async def _ensure_agent_infra():
+    """Initialize MCP connections and DAL (same as OrderGuard server startup)."""
+    if _agent_infra.get("ready"):
+        return
 
-    if _original_reply_text is not None:
-        return  # Already installed
+    from order_guard.config import get_settings
+    from order_guard.mcp import MCPManager
+    from order_guard.mcp.models import MCPServerConfig as MCPServerConfigModel
+    from order_guard.data_access import DataAccessLayer
+    from order_guard.storage.database import init_db
 
-    _original_reply_text = feishu._reply_text
+    settings = get_settings()
 
-    async def _hooked_reply_text(bot_config, chat_id, text, message_id=""):
-        # Put reply into queue for TestPilot to consume
-        await _reply_queue.put((chat_id, text))
-        # Still call original so logs etc. work (will fail on Feishu API, that's fine)
-        try:
-            await _original_reply_text(bot_config, chat_id, text, message_id)
-        except Exception:
-            pass  # Feishu API call will fail locally, expected
+    # Init DB
+    await init_db()
 
-    feishu._reply_text = _hooked_reply_text
+    # Sync rules
+    from order_guard.engine.rules import RuleManager
+    rm = RuleManager()
+    await rm.sync_rules_to_db()
+
+    # MCP connections (same pattern as main.py)
+    mcp_configs = [
+        MCPServerConfigModel(**c.model_dump()) for c in settings.mcp_servers
+        if c.enabled
+    ]
+    mcp_manager = MCPManager(mcp_configs)
+    if mcp_configs:
+        await mcp_manager.connect_all()
+        logger.info("Pilot: {} MCP servers connected", len(mcp_manager._connections))
+
+    # DAL
+    dal = DataAccessLayer(mcp_manager, mcp_configs)
+    await dal.initialize()
+
+    _agent_infra["mcp_manager"] = mcp_manager
+    _agent_infra["dal"] = dal
+    _agent_infra["settings"] = settings
+    _agent_infra["ready"] = True
 
 
-def _uninstall_reply_hook():
-    """Restore original _reply_text."""
-    global _original_reply_text
-    if _original_reply_text is not None:
-        from order_guard.api import feishu
-        feishu._reply_text = _original_reply_text
-        _original_reply_text = None
+async def _cleanup_agent_infra():
+    """Disconnect MCP servers."""
+    mgr = _agent_infra.get("mcp_manager")
+    if mgr:
+        await mgr.disconnect_all()
+    _agent_infra.clear()
 
 
-# ---------------------------------------------------------------------------
-# Send simulated Feishu event
-# ---------------------------------------------------------------------------
+async def _call_agent(user_id: str, text: str, context_messages: list[dict]) -> str:
+    """Call the unified Agent directly (same code path as Feishu bot)."""
+    from order_guard.engine.agent import Agent, AgentConfig
+    from order_guard.engine.llm_client import LLMClient
+    from order_guard.engine.prompts import build_unified_prompt
+    from order_guard.tools import (
+        rule_tools, context_tools, alert_tools, data_tools,
+        health_tools, report_tools, usage_tools,
+    )
 
-async def _send_feishu_event(
-    base_url: str,
-    user_id: str,
-    chat_id: str,
-    text: str,
-) -> bool:
-    """POST a simulated Feishu message event to OrderGuard."""
-    event_id = f"pilot_{uuid.uuid4().hex[:16]}"
-    message_id = f"om_pilot_{uuid.uuid4().hex[:12]}"
+    dal = _agent_infra["dal"]
+    mcp_manager = _agent_infra["mcp_manager"]
 
-    payload = {
-        "schema": "2.0",
-        "header": {
-            "event_id": event_id,
-            "event_type": "im.message.receive_v1",
-            "create_time": str(int(time.time() * 1000)),
-            "token": "pilot_test",
-            "app_id": "pilot",
-            "tenant_key": "pilot",
-        },
-        "event": {
-            "sender": {
-                "sender_id": {
-                    "user_id": user_id,
-                    "open_id": user_id,
-                    "union_id": user_id,
-                },
-                "sender_type": "user",
-                "tenant_key": "pilot",
-            },
-            "message": {
-                "message_id": message_id,
-                "chat_id": chat_id,
-                "chat_type": "group",
-                "message_type": "text",
-                "content": json.dumps({"text": text}),
-                "mentions": [],
-                "create_time": str(int(time.time() * 1000)),
-            },
-        },
-    }
+    # Configure tool dependencies (same as feishu.py _run_unified_agent)
+    rule_tools.configure(data_access_layer=dal, mcp_manager=mcp_manager)
+    data_tools.configure(data_access_layer=dal)
+    health_tools.configure(mcp_manager=mcp_manager)
+    report_tools.configure(data_access_layer=dal, mcp_manager=mcp_manager)
 
+    all_tools = (
+        data_tools.TOOL_DEFINITIONS
+        + rule_tools.TOOL_DEFINITIONS
+        + context_tools.TOOL_DEFINITIONS
+        + alert_tools.TOOL_DEFINITIONS
+        + health_tools.TOOL_DEFINITIONS
+        + report_tools.TOOL_DEFINITIONS
+        + usage_tools.TOOL_DEFINITIONS
+    )
+    all_executors = {}
+    all_executors.update(data_tools.TOOL_EXECUTORS)
+    all_executors.update(rule_tools.TOOL_EXECUTORS)
+    all_executors.update(context_tools.TOOL_EXECUTORS)
+    all_executors.update(alert_tools.TOOL_EXECUTORS)
+    all_executors.update(health_tools.TOOL_EXECUTORS)
+    all_executors.update(report_tools.TOOL_EXECUTORS)
+    all_executors.update(usage_tools.TOOL_EXECUTORS)
+
+    # Business context
+    biz_context = ""
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{base_url}/api/feishu/event", json=payload)
-            return resp.status_code == 200
-    except Exception as e:
-        logger.error("Failed to send event to OrderGuard: {}", e)
-        return False
+        from order_guard.tools.context_tools import build_context_injection
+        biz_context = await build_context_injection()
+    except Exception:
+        pass
 
+    system_prompt = build_unified_prompt(biz_context)
 
-async def _collect_reply(chat_id: str, timeout: float) -> str | None:
-    """Wait for OrderGuard's reply from the hook queue."""
-    deadline = time.time() + timeout
-    collected_parts = []
+    agent = Agent(
+        llm_client=LLMClient(),
+        data_access_layer=dal,
+        config=AgentConfig(inject_business_context=False),
+        tools=all_tools,
+        tool_executors=all_executors,
+    )
 
-    while time.time() < deadline:
-        try:
-            remaining = max(0.1, deadline - time.time())
-            cid, text = await asyncio.wait_for(_reply_queue.get(), timeout=remaining)
-            if cid == chat_id:
-                collected_parts.append(text)
-                # Give a short window for additional parts (progressive output)
-                await asyncio.sleep(1.0)
-                # Drain any remaining
-                while not _reply_queue.empty():
-                    try:
-                        cid2, text2 = _reply_queue.get_nowait()
-                        if cid2 == chat_id:
-                            collected_parts.append(text2)
-                    except asyncio.QueueEmpty:
-                        break
-                break
-        except asyncio.TimeoutError:
-            break
+    result = await agent.run_unified(
+        user_message=text,
+        system_prompt=system_prompt,
+        context_messages=context_messages,
+        trigger_type="chat",
+        user_id=user_id,
+    )
 
-    return "\n".join(collected_parts) if collected_parts else None
+    return result.response or "抱歉，我没有理解你的意思。"
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +236,68 @@ async def _llm_call(messages: list[dict], model: str, api_key: str, api_base: st
         temperature=0.7, max_tokens=500,
         api_key=api_key, api_base=api_base or None,
     )
-    return resp.choices[0].message.content or ""
+    msg = resp.choices[0].message
+    content = msg.content or ""
+
+    # GLM-5 coding plan puts actual reply in reasoning_content, content is empty
+    if not content.strip():
+        reasoning = getattr(msg, "reasoning_content", "") or ""
+        if reasoning:
+            content = _extract_reply_from_reasoning(reasoning)
+
+    return content
+
+
+def _extract_reply_from_reasoning(reasoning: str) -> str:
+    """Extract the actual reply from GLM-5's reasoning_content.
+
+    GLM-5 puts analysis (numbered steps) then the actual reply at the end.
+    We try to find the final conversational output.
+    """
+    lines = reasoning.strip().split("\n")
+
+    # Strategy 1: Find content after last "输出" / "回复" / "消息" marker
+    for marker in ["输出：", "回复：", "消息：", "最终输出", "最终回复"]:
+        for i, line in enumerate(lines):
+            if marker in line:
+                rest = "\n".join(lines[i:]).split(marker, 1)[-1].strip()
+                # Clean up quotes and markdown
+                rest = rest.strip('"').strip("'").strip("`").strip()
+                if rest and len(rest) > 5:
+                    return rest
+
+    # Strategy 2: Take the last non-empty, non-analytical line
+    # Skip lines that look like analysis (start with number, *, -, #)
+    candidates = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        if line[0] in "0123456789*-#•→>":
+            continue
+        if line.startswith("**") and line.endswith("**"):
+            continue
+        candidates.append(line)
+        if len(candidates) >= 3:
+            break
+
+    if candidates:
+        # Return the last meaningful line(s)
+        result = candidates[0].strip('"').strip("'").strip()
+        if len(result) > 5:
+            return result
+
+    # Strategy 3: Last resort — take everything after the last numbered step
+    import re
+    parts = re.split(r'\n\d+\.\s', reasoning)
+    if len(parts) > 1:
+        last_part = parts[-1].strip()
+        # Find the last quoted text
+        quotes = re.findall(r'["""](.+?)["""]', last_part)
+        if quotes:
+            return quotes[-1]
+
+    return ""
 
 
 async def generate_user_message(
@@ -243,12 +305,32 @@ async def generate_user_message(
     model: str, api_key: str, api_base: str = "",
 ) -> str:
     """AI generates the next user message based on persona."""
-    messages = [
-        {"role": "system", "content": persona_prompt},
-        *history,
-        {"role": "user", "content": "请生成你的下一条消息。只输出消息内容本身。"},
-    ]
-    return await _llm_call(messages, model, api_key, api_base)
+    strict_instruction = (
+        "\n\n【重要】你必须直接输出对话消息本身，不要输出分析、思考过程、编号列表或任何元信息。"
+        "像真人发微信一样，直接说话。"
+    )
+    if not history:
+        messages = [
+            {"role": "user", "content": persona_prompt + strict_instruction + "\n\n请开始对话，发出你的第一条消息："},
+        ]
+    else:
+        # Build conversation as a dialogue script
+        conv_text = "\n".join(
+            f"{'我' if m['role'] == 'user' else '系统'}: {m['content'][:300]}"
+            for m in history
+        )
+        messages = [
+            {"role": "user", "content": (
+                persona_prompt + strict_instruction +
+                f"\n\n之前的对话：\n{conv_text}\n\n请继续对话，发出你的下一条消息："
+            )},
+        ]
+    try:
+        result = await _llm_call(messages, model, api_key, api_base)
+        return result.strip().strip('"').strip("'")
+    except Exception as e:
+        logger.error("生成用户消息失败: {}", e)
+        return ""
 
 
 async def evaluate_conversation(
@@ -317,6 +399,7 @@ def load_tasks(config: PilotConfig) -> list[dict]:
                     "task_name": task["name"],
                     "task_goal": task["goal"],
                     "criteria": task["criteria"],
+                    "messages": task.get("messages", []),
                 })
     return tasks
 
@@ -353,14 +436,24 @@ async def run_scenario(
     )
 
     conversation: list[dict] = []
+    preset_messages = task.get("messages", [])
 
     try:
-        for turn in range(config.max_turns_per_scenario):
-            # 1. AI generates user message
-            user_msg = await generate_user_message(
-                persona_prompt, conversation, llm_model, llm_key, llm_base,
-            )
+        await _ensure_agent_infra()
+
+        max_turns = min(config.max_turns_per_scenario, len(preset_messages)) if preset_messages else config.max_turns_per_scenario
+
+        for turn in range(max_turns):
+            # 1. Get user message: preset or AI-generated
+            if preset_messages and turn < len(preset_messages):
+                user_msg = preset_messages[turn]
+            else:
+                logger.debug("Generating user message (turn {})...", turn + 1)
+                user_msg = await generate_user_message(
+                    persona_prompt, conversation, llm_model, llm_key, llm_base,
+                )
             if not user_msg.strip():
+                logger.warning("用户消息为空 (turn {}), 跳过", turn + 1)
                 break
 
             conversation.append({"role": "user", "content": user_msg})
@@ -370,29 +463,19 @@ async def run_scenario(
             })
             logger.info("[{}] 用户: {}", task["persona_name"], user_msg[:80])
 
-            # 2. Send to OrderGuard via HTTP
-            # Clear queue first
-            while not _reply_queue.empty():
-                try:
-                    _reply_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-
+            # 2. Call Agent directly (same code path as Feishu bot)
             t0 = time.time()
-            ok = await _send_feishu_event(config.orderguard_url, user_id, chat_id, user_msg)
-            if not ok:
-                record.error = f"第 {turn + 1} 轮: 发送失败"
+            try:
+                # Build context from prior conversation
+                ctx = [{"role": m["role"], "content": m["content"]} for m in conversation[:-1]]
+                reply = await _call_agent(user_id, user_msg, ctx)
+            except Exception as e:
+                record.error = f"第 {turn + 1} 轮 Agent 错误: {e}"
+                logger.error(record.error)
                 break
 
-            # 3. Collect reply
-            reply = await _collect_reply(chat_id, config.reply_timeout_seconds)
             elapsed = time.time() - t0
             record.response_times.append(elapsed)
-
-            if reply is None:
-                record.error = f"第 {turn + 1} 轮: 超时 ({config.reply_timeout_seconds}s)"
-                logger.warning(record.error)
-                break
 
             conversation.append({"role": "assistant", "content": reply})
             record.messages.append({
@@ -402,7 +485,7 @@ async def run_scenario(
             })
             logger.info("[{}] Agent ({:.1f}s): {}", task["persona_name"], elapsed, reply[:80])
 
-            # 4. Continue if Agent asked a question and we haven't reached max turns
+            # 3. Continue if Agent asked a question and we haven't reached max turns
             if turn >= config.max_turns_per_scenario - 1:
                 break
             if "？" not in reply and "?" not in reply and turn >= 1:
@@ -561,7 +644,6 @@ async def run_pilot(
         logger.error("No matching scenarios")
         return []
 
-    _install_reply_hook()
     logger.info("TestPilot: {} scenarios, mode={}, interval={}s",
                 len(tasks), config.mode, config.interval_seconds)
 
@@ -611,6 +693,6 @@ async def run_pilot(
     except KeyboardInterrupt:
         logger.info("TestPilot stopped")
     finally:
-        _uninstall_reply_hook()
+        await _cleanup_agent_infra()
 
     return all_records

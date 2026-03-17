@@ -1,13 +1,7 @@
 # TestPilot 场景定义 — 面向真实环境
 #
-# 和 scenarios/personas.yaml 不同，这里的 criteria 只验证行为模式，
-# 不依赖特定数据内容（因为跑的是真实数据库）。
-#
-# 判断标准：
-#   - Agent 是否正确理解了用户意图
-#   - Agent 是否调用了合理的工具
-#   - 回复是否包含有意义的信息（不是空话或报错）
-#   - 回复是否用中文且格式清晰
+# messages: 预设的用户消息序列（按顺序发送）
+# criteria: 验证行为模式，不依赖特定数据内容
 
 defaults:
   max_turns: 5
@@ -15,78 +9,89 @@ defaults:
 roles:
   - id: operations
     name: 电商运营
-    description: 负责日常商品销售监控、库存管理的运营人员。不懂 SQL，用自然语言描述需求。
+    description: 负责日常商品销售监控、库存管理的运营人员。
     personas:
       - id: experienced
         name: 老运营
-        traits: 做事直接，喜欢看数字，会追问细节。
-      - id: newbie
-        name: 实习生
-        traits: 第一次用系统，问题比较基础，需要引导。
+        traits: 做事直接，喜欢看数字。
     tasks:
       - id: query_data
         name: 查业务数据
-        goal: 向系统查询一些业务数据（库存、订单、销售等）
+        goal: 查询库存或销售数据
+        messages:
+          - "帮我查一下现在库存情况，有没有快缺货的商品？"
+          - "具体哪些 SKU 库存最少？列个表给我看看"
         criteria:
           - Agent 调用了数据查询相关工具（query 或 get_schema 或 list_datasources）
-          - 回复中包含具体的数据信息（数字、表格或列表），而不是泛泛而谈
-          - 回复使用中文且格式清晰
+          - 回复中包含具体的数据信息（数字、表格或列表）
       - id: explore_datasource
         name: 了解数据源
-        goal: 了解系统连接了哪些数据源，有哪些数据表可以查询
+        goal: 了解系统有哪些数据表
+        messages:
+          - "系统现在连了哪些数据库？都有什么表？"
         criteria:
           - Agent 调用了 list_datasources 或 get_schema 工具
           - 回复中列出了数据源或数据表信息
       - id: create_rule
         name: 创建监控规则
-        goal: 让系统帮忙创建一个定时监控的规则
+        goal: 创建一个定时监控规则
+        messages:
+          - "帮我创建一个每天早上 9 点检查库存的规则，库存低于安全线的要告警"
+          - "确认，就这样创建"
         criteria:
-          - Agent 理解了用户要创建规则的意图
-          - Agent 调用了 create_rule 工具或引导用户描述规则需求
-          - 回复中包含规则相关信息（名称、执行时间或监控内容）
+          - Agent 调用了 create_rule 工具或引导用户描述规则
+          - 回复中包含规则相关信息
 
   - id: manager
     name: 管理层
-    description: 公司管理层，关注整体经营情况，提问比较概括。
+    description: 公司管理层，关注整体经营情况。
     personas:
       - id: boss
         name: 王总
-        traits: 说话简洁直接，只关心结果，不要技术细节。
+        traits: 说话简洁直接。
     tasks:
       - id: check_alerts
         name: 查看告警
-        goal: 了解最近有没有什么异常告警需要关注
+        goal: 了解最近的异常告警
+        messages:
+          - "最近有什么告警吗？"
         criteria:
           - Agent 调用了告警相关工具（list_alerts 或 get_alert_stats）
-          - 回复中说明了告警情况（有告警则列出，没有则明确告知无异常）
+          - 回复中说明了告警情况
       - id: overview
         name: 经营概览
-        goal: 大致了解最近的经营数据
+        goal: 了解经营数据
+        messages:
+          - "帮我看看最近的销售情况怎么样"
+          - "哪些品类卖得最好？"
         criteria:
-          - Agent 尝试查询了业务数据
-          - 回复中包含数据分析或业务指标信息
-          - 即使数据有限，也给出了有意义的回复而不是报错
+          - Agent 调用了 query 工具查询数据
+          - 回复中包含数据分析信息
 
   - id: admin
     name: 系统管理员
-    description: 负责系统配置和日常维护的管理员。
+    description: 负责系统配置和维护。
     personas:
       - id: sysadmin
         name: 陈管理员
-        traits: 做事严谨，会确认操作结果。
+        traits: 做事严谨。
     tasks:
       - id: list_rules
         name: 查看规则
-        goal: 查看当前系统配置了哪些监控规则
+        goal: 查看监控规则状态
+        messages:
+          - "列一下现在所有的监控规则"
         criteria:
           - Agent 调用了 list_rules 工具
-          - 回复中包含规则列表信息（规则数量、名称或状态）
+          - 回复中包含规则列表
       - id: system_status
         name: 系统状态
-        goal: 检查系统运行状态是否正常
+        goal: 检查系统健康
+        messages:
+          - "检查一下系统状态，数据源都正常吗？"
         criteria:
-          - Agent 调用了 check_health 或 list_datasources 等状态检查工具
-          - 回复中包含系统状态信息
+          - Agent 调用了 check_health 或 list_datasources 工具
+          - 回复中包含状态信息
 
   - id: first_time
     name: 新手用户
@@ -94,11 +99,14 @@ roles:
     personas:
       - id: curious
         name: 好奇新人
-        traits: 会先问系统能做什么，然后尝试简单操作。
+        traits: 第一次用，什么都不懂。
     tasks:
       - id: explore
         name: 探索系统
         goal: 了解系统能做什么
+        messages:
+          - "你好，请问这个系统能帮我做什么？"
+          - "有哪些数据库可以查？帮我看看"
         criteria:
-          - Agent 的回复对新手有帮助，介绍了系统能力
-          - 回复使用中文，语气友好
+          - Agent 的回复对新手有帮助
+          - 回复使用中文
