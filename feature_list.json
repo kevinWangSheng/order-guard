@@ -22,7 +22,9 @@
       "name": "配置管理",
       "layer": "基础层",
       "passes": true,
-      "depends_on": ["T01"],
+      "depends_on": [
+        "T01"
+      ],
       "spec": "specs/t02-config/",
       "steps": [
         "config.example.yaml 包含所有配置项 + 注释",
@@ -38,7 +40,10 @@
       "name": "存储层",
       "layer": "基础层",
       "passes": true,
-      "depends_on": ["T01", "T02"],
+      "depends_on": [
+        "T01",
+        "T02"
+      ],
       "spec": "specs/t03-storage/",
       "steps": [
         "4 个 SQLModel 模型可正常建表",
@@ -53,7 +58,10 @@
       "name": "数据对接",
       "layer": "核心引擎",
       "passes": true,
-      "depends_on": ["T01", "T02"],
+      "depends_on": [
+        "T01",
+        "T02"
+      ],
       "spec": "specs/t04-connectors/",
       "steps": [
         "BaseConnector 抽象类定义清晰",
@@ -68,7 +76,9 @@
       "name": "指标计算",
       "layer": "核心引擎",
       "passes": true,
-      "depends_on": ["T04"],
+      "depends_on": [
+        "T04"
+      ],
       "spec": "specs/t05-metrics/",
       "steps": [
         "库存指标计算正确（days_of_stock, stock_risk）",
@@ -83,7 +93,10 @@
       "name": "AI 层",
       "layer": "核心引擎",
       "passes": true,
-      "depends_on": ["T02", "T05"],
+      "depends_on": [
+        "T02",
+        "T05"
+      ],
       "spec": "specs/t06-ai-layer/",
       "steps": [
         "LiteLLM 封装可正常调用 LLM API",
@@ -99,7 +112,10 @@
       "name": "规则管理",
       "layer": "核心引擎",
       "passes": true,
-      "depends_on": ["T02", "T03"],
+      "depends_on": [
+        "T02",
+        "T03"
+      ],
       "spec": "specs/t07-rules/",
       "steps": [
         "YAML 规则加载 + DB 同步逻辑正确",
@@ -114,7 +130,10 @@
       "name": "告警推送",
       "layer": "集成层",
       "passes": true,
-      "depends_on": ["T03", "T06"],
+      "depends_on": [
+        "T03",
+        "T06"
+      ],
       "spec": "specs/t08-alerts/",
       "steps": [
         "WebhookChannel 成功 POST JSON 到目标 URL",
@@ -129,7 +148,15 @@
       "name": "调度层",
       "layer": "集成层",
       "passes": true,
-      "depends_on": ["T02", "T03", "T04", "T05", "T06", "T07", "T08"],
+      "depends_on": [
+        "T02",
+        "T03",
+        "T04",
+        "T05",
+        "T06",
+        "T07",
+        "T08"
+      ],
       "spec": "specs/t09-scheduler/",
       "steps": [
         "APScheduler 和 FastAPI 共存正常",
@@ -144,7 +171,9 @@
       "name": "CLI 入口",
       "layer": "集成层",
       "passes": true,
-      "depends_on": ["T09"],
+      "depends_on": [
+        "T09"
+      ],
       "spec": "specs/t10-cli/",
       "steps": [
         "serve 命令启动 FastAPI + Scheduler",
@@ -160,7 +189,11 @@
       "name": "CSV/Excel 数据源 Connector",
       "layer": "数据源接入",
       "passes": true,
-      "depends_on": ["T01", "T02", "T04"],
+      "depends_on": [
+        "T01",
+        "T02",
+        "T04"
+      ],
       "spec": "specs/t11-csv-connector/",
       "steps": [
         "CSVConnector 实现 BaseConnector 全部方法",
@@ -179,7 +212,9 @@
       "name": "飞书消息卡片",
       "layer": "告警优化",
       "passes": true,
-      "depends_on": ["T08"],
+      "depends_on": [
+        "T08"
+      ],
       "spec": null,
       "steps": [
         "飞书 URL 自动识别（feishu.cn / lark.cn）",
@@ -193,7 +228,9 @@
       "name": "告警合并推送",
       "layer": "告警优化",
       "passes": true,
-      "depends_on": ["T08"],
+      "depends_on": [
+        "T08"
+      ],
       "spec": null,
       "steps": [
         "AlertDispatcher.dispatch() 使用 send_batch 一次推送",
@@ -206,7 +243,9 @@
       "name": "告警静默期/去重",
       "layer": "告警优化",
       "passes": true,
-      "depends_on": ["T08"],
+      "depends_on": [
+        "T08"
+      ],
       "spec": null,
       "steps": [
         "AlertsConfig.silence_minutes 默认 30 分钟",
@@ -222,7 +261,9 @@
       "name": "MCP Client 基础层",
       "layer": "MCP 数据源",
       "passes": true,
-      "depends_on": ["T02"],
+      "depends_on": [
+        "T02"
+      ],
       "spec": "specs/t16-mcp-client/",
       "steps": [
         "mcp SDK 安装成功，无依赖冲突",
@@ -241,7 +282,10 @@
       "name": "AI Agent 工具调用",
       "layer": "MCP 数据源",
       "passes": true,
-      "depends_on": ["T06", "T16"],
+      "depends_on": [
+        "T06",
+        "T16"
+      ],
       "spec": "specs/t17-ai-agent/",
       "steps": [
         "LLMClient 支持 tool use（tools 参数 + tool_calls 解析）",
@@ -260,7 +304,10 @@
       "name": "MCP Connector + Pipeline 适配",
       "layer": "MCP 数据源",
       "passes": true,
-      "depends_on": ["T09", "T17"],
+      "depends_on": [
+        "T09",
+        "T17"
+      ],
       "spec": "specs/t18-mcp-pipeline/",
       "steps": [
         "AlertRule 表新增 connector_type 和 mcp_server 字段",
@@ -278,7 +325,9 @@
       "name": "端到端验证（SQLite MCP）",
       "layer": "MCP 数据源",
       "passes": true,
-      "depends_on": ["T18"],
+      "depends_on": [
+        "T18"
+      ],
       "spec": "specs/t19-e2e-sqlite-mcp/",
       "steps": [
         "测试 SQLite 数据库创建成功（含模拟数据）",
@@ -296,7 +345,9 @@
       "name": "DBHub 集成",
       "layer": "生产数据源",
       "passes": true,
-      "depends_on": ["T16"],
+      "depends_on": [
+        "T16"
+      ],
       "spec": "specs/t20-dbhub-integration/",
       "steps": [
         "DBHub 可通过 npx 正常安装和启动",
@@ -317,7 +368,10 @@
       "name": "Schema 防幻觉",
       "layer": "生产数据源",
       "passes": true,
-      "depends_on": ["T17", "T20"],
+      "depends_on": [
+        "T17",
+        "T20"
+      ],
       "spec": "specs/t21-schema-anti-hallucination/",
       "steps": [
         "Agent 启动时自动加载数据库 schema",
@@ -334,7 +388,9 @@
       "name": "热冷数据 + 查询优化",
       "layer": "生产数据源",
       "passes": true,
-      "depends_on": ["T21"],
+      "depends_on": [
+        "T21"
+      ],
       "spec": "specs/t22-hot-cold-data/",
       "steps": [
         "规则可配置 data_window 时间窗口",
@@ -350,7 +406,10 @@
       "name": "查询审计",
       "layer": "生产数据源",
       "passes": true,
-      "depends_on": ["T17", "T20"],
+      "depends_on": [
+        "T17",
+        "T20"
+      ],
       "spec": "specs/t23-query-audit/",
       "steps": [
         "query_logs 表创建成功",
@@ -367,7 +426,10 @@
       "name": "飞书 Bot 对话",
       "layer": "Bot 对话",
       "passes": true,
-      "depends_on": ["T12", "T20"],
+      "depends_on": [
+        "T12",
+        "T20"
+      ],
       "spec": "specs/t24-feishu-bot/",
       "steps": [
         "飞书 Event 回调路由正常响应",
@@ -386,7 +448,13 @@
       "name": "清理传统数据流",
       "layer": "架构清理",
       "passes": true,
-      "depends_on": ["T20", "T21", "T22", "T23", "T24"],
+      "depends_on": [
+        "T20",
+        "T21",
+        "T22",
+        "T23",
+        "T24"
+      ],
       "spec": "specs/t25-legacy-cleanup/",
       "steps": [
         "connectors 包已移除（base / mock / csv / registry）",
@@ -403,7 +471,11 @@
       "name": "统一数据访问层",
       "layer": "架构基础",
       "passes": true,
-      "depends_on": ["T16", "T17", "T20"],
+      "depends_on": [
+        "T16",
+        "T17",
+        "T20"
+      ],
       "spec": "specs/n1-unified-data-access/",
       "steps": [
         "Agent 只看到 3 个数据查询工具：list_datasources / get_schema / query",
@@ -442,7 +514,9 @@
       "name": "会话管理",
       "layer": "架构基础",
       "passes": true,
-      "depends_on": ["T24"],
+      "depends_on": [
+        "T24"
+      ],
       "spec": "specs/n5-session-management/",
       "steps": [
         "sessions 和 session_messages 表创建成功",
@@ -461,7 +535,10 @@
       "name": "自然语言配规则",
       "layer": "产品差异化",
       "passes": true,
-      "depends_on": ["N1", "N5"],
+      "depends_on": [
+        "N1",
+        "N5"
+      ],
       "spec": "specs/n4-natural-language-rules/",
       "steps": [
         "意图分类正确识别 CREATE_RULE / MANAGE_RULE",
@@ -480,7 +557,10 @@
       "name": "定时报告",
       "layer": "增值功能",
       "passes": true,
-      "depends_on": ["N1", "N8"],
+      "depends_on": [
+        "N1",
+        "N8"
+      ],
       "spec": "specs/n6-scheduled-reports/",
       "steps": [
         "config.example.yaml 包含 reports 配置示例",
@@ -499,7 +579,10 @@
       "name": "CSV 辅助输入",
       "layer": "增值功能",
       "passes": true,
-      "depends_on": ["N1", "N5"],
+      "depends_on": [
+        "N1",
+        "N5"
+      ],
       "spec": "specs/n7-csv-auxiliary-input/",
       "steps": [
         "飞书 Bot 能接收 CSV 和 Excel 文件",
@@ -517,7 +600,9 @@
       "name": "规则工具",
       "layer": "统一Agent",
       "passes": true,
-      "depends_on": ["N4"],
+      "depends_on": [
+        "N4"
+      ],
       "spec": "specs/n9-rule-tools/",
       "steps": [
         "5 个规则工具注册成功（list/create/update/delete/test）",
@@ -532,7 +617,9 @@
       "name": "上下文工具",
       "layer": "统一Agent",
       "passes": true,
-      "depends_on": ["N8"],
+      "depends_on": [
+        "N8"
+      ],
       "spec": "specs/n10-context-tools/",
       "steps": [
         "3 个工具注册成功（list/add/delete_context）",
@@ -546,7 +633,9 @@
       "name": "告警历史工具",
       "layer": "统一Agent",
       "passes": true,
-      "depends_on": ["T08"],
+      "depends_on": [
+        "T08"
+      ],
       "spec": "specs/n11-alert-history/",
       "steps": [
         "list_alerts 工具注册成功",
@@ -560,7 +649,11 @@
       "name": "统一 Agent",
       "layer": "统一Agent",
       "passes": true,
-      "depends_on": ["N9", "N10", "N11"],
+      "depends_on": [
+        "N9",
+        "N10",
+        "N11"
+      ],
       "spec": "specs/n12-unified-agent/",
       "steps": [
         "Agent 支持 12 工具",
@@ -576,7 +669,9 @@
       "name": "飞书重构",
       "layer": "统一Agent",
       "passes": true,
-      "depends_on": ["N12"],
+      "depends_on": [
+        "N12"
+      ],
       "spec": "specs/n13-feishu-refactor/",
       "steps": [
         "意图分类代码已删除",
@@ -592,7 +687,10 @@
       "name": "会话超时",
       "layer": "统一Agent",
       "passes": true,
-      "depends_on": ["N5", "N13"],
+      "depends_on": [
+        "N5",
+        "N13"
+      ],
       "spec": "specs/n14-session-timeout/",
       "steps": [
         "30 分钟不活跃自动新建会话",
@@ -609,7 +707,9 @@
       "name": "告警闭环",
       "layer": "产品完整度",
       "passes": true,
-      "depends_on": ["N11"],
+      "depends_on": [
+        "N11"
+      ],
       "spec": "specs/p1-alert-lifecycle/",
       "steps": [
         "Alert 表新增 resolution / resolved_by / resolved_at / note 字段",
@@ -656,7 +756,9 @@
       "name": "规则效果评估",
       "layer": "产品完整度",
       "passes": true,
-      "depends_on": ["P1"],
+      "depends_on": [
+        "P1"
+      ],
       "spec": "specs/p3-rule-effectiveness/",
       "steps": [
         "list_rules 返回新增 trigger_count_7d / false_positive_rate / last_triggered_at / run_success_rate",
@@ -677,7 +779,9 @@
       "name": "数据源健康监控",
       "layer": "产品完整度",
       "passes": true,
-      "depends_on": ["N1"],
+      "depends_on": [
+        "N1"
+      ],
       "spec": "specs/p4-datasource-health/",
       "steps": [
         "DataSourceHealthLog 表创建成功",
@@ -703,7 +807,9 @@
       "name": "报告模板定制",
       "layer": "产品完整度",
       "passes": true,
-      "depends_on": ["N6"],
+      "depends_on": [
+        "N6"
+      ],
       "spec": "specs/p6-report-customization/",
       "steps": [
         "ReportConfig 表新增 sections / kpis / template_style 字段",
@@ -721,6 +827,78 @@
         "统一返回信封 {data, hint} / {error, hint}",
         "有单元测试",
         "全量回归零失败"
+      ]
+    },
+    {
+      "id": "E5",
+      "name": "Investigation 场景定义",
+      "layer": "测试层",
+      "passes": false,
+      "depends_on": [
+        "E4"
+      ],
+      "spec": "specs/agent-testing-v2/",
+      "steps": [
+        "scenarios_v2.yaml 包含5个场景，每场景有 business_context / conversation_guidelines / ground_truth / session_criteria",
+        "ground_truth_db.py 创建受控 SQLite，植入与 ground_truth 对应的可验证数据",
+        "4个人设完整定义（小王/李姐/陈/王总），有 4维度描述",
+        "conftest.py 改造：FakeMCPConnection 接入 ground_truth_db",
+        "test_investigation.py 生成 5场景×2人设=10个 pytest case",
+        "至少1个场景端到端跑通（LLM 对话 + session scorer 输出结果）"
+      ]
+    },
+    {
+      "id": "E6",
+      "name": "Session Scorer（5维度）",
+      "layer": "测试层",
+      "passes": false,
+      "depends_on": [
+        "E5"
+      ],
+      "spec": "specs/agent-testing-v2/",
+      "steps": [
+        "session_scorer.py 实现 5维度评分（goal_achieved / data_accuracy / actionable / no_hallucination / conversation_quality）",
+        "Judge prompt 传入完整对话 + ground_truth，返回结构化 JSON",
+        "SessionScore dataclass 和 score_session() 函数正确实现",
+        "scores 推送到 LangWatch（与 pilot_bot 的 _push_langfuse_scores 方式一致）",
+        "10个单元测试（mock Judge LLM，验证评分逻辑）",
+        "全部10个 investigation case 跑通并有评分输出"
+      ]
+    },
+    {
+      "id": "E7",
+      "name": "Soak Test 框架",
+      "layer": "测试层",
+      "passes": false,
+      "depends_on": [
+        "E6"
+      ],
+      "spec": "specs/agent-testing-v2/",
+      "steps": [
+        "soak_runner.py 实现：同一场景跑 N 次，收集所有 SessionScore",
+        "统计输出：pass_rate / avg_tokens / avg_latency / 失败维度分布",
+        "test_soak.py + pytest mark soak",
+        "CLI 命令 order-guard test-soak --scenario S01 --rounds 20",
+        "S01 场景跑10次，pass_rate 数据正确统计并输出",
+        "结果推送飞书 Webhook（同 pilot_bot 报告格式）"
+      ]
+    },
+    {
+      "id": "E8",
+      "name": "时序一致性测试",
+      "layer": "测试层",
+      "passes": false,
+      "depends_on": [
+        "E6"
+      ],
+      "spec": "specs/agent-testing-v2/",
+      "steps": [
+        "temporal_coherence_test.py 实现：30轮对话框架，含时序探针定义",
+        "ProbeInjector：在指定轮次植入探测问题，记录答案",
+        "CoherenceEvaluator：对比同一探针不同轮次的答案，检测矛盾",
+        "test_temporal.py + pytest mark e2e",
+        "1个完整时序测试跑通（30轮对话 + 2个探针 + 一致性评分）",
+        "一致性评分推送 LangWatch"
       ]
     }
   ]

@@ -818,3 +818,100 @@ uv run pytest tests/ --ignore=tests/e2e -m "not e2e" -v
 ### Next Steps
 - 配置 LLM API key 后跑 L3 E2E 测试
 - 修复 BUG-1（工具注册缺口）
+
+## 2026-03-18 | Session 18: E1-E4 评估系统
+
+### Completed
+- **E1: Golden Dataset** ✓（已有，45 条用例）
+  - `tests/evals/golden_dataset.yaml`：覆盖 6 个分类（inventory/sales/rules/alerts/system/adversarial）
+  - 每条含 expected_tools / forbidden_tools / expected_output_contains / expected_output_not_contains / reference_answer
+  - 三个难度级别（easy/medium/hard）
+
+- **E2: LLM-as-Judge 评判器** ✓（已有）
+  - `src/order_guard/evals/judge.py`：4 维度评判（accuracy/completeness/actionability/safety）
+  - 0/1 二元评分，GPT-4o 作为裁判，无 API Key 时优雅降级
+
+- **E3: 评分写入 Langfuse** ✓
+  - `_push_langfuse_scores()` 增强：推送 L1（l1_pass/l1_criteria）+ L2（judge_accuracy/completeness/actionability/safety/overall）
+  - trace metadata 包含 has_judge 标记
+
+- **E4: pilot_bot 集成 Judge** ✓
+  - run_scenario 流程增加 L2 Judge 步骤（Agent → L1 → L2 → Langfuse）
+  - `_run_judge()` 收集 tool_results_log 传给 Judge 验证准确性
+  - build_report_card 增强：L2 维度平均分汇总 + 每条 Judge 状态列
+  - save_report 包含 judge_result
+  - config.yaml 包含 eval 配置段
+
+- **Golden Dataset Runner** ✓（新增）
+  - `tests/evals/run_golden.py`：批量运行评估用例
+  - 支持 --category / --id / --no-judge / --output 参数
+  - L1 规则匹配 + L2 Judge 评判 + 终端报告 + JSON 导出
+
+- **测试文档** ✓
+  - `specs/eval-system/eval.md`：完整验收标准 + 运行命令
+
+- **35 个单元测试** ✓
+  - TestGoldenDataset（7 tests）：数据集结构和覆盖度
+  - TestL1RuleEvaluation（10 tests）：L1 规则评判逻辑
+  - TestJudge（7 tests）：Judge 模块（mock LLM）
+  - TestPilotJudgeIntegration（7 tests）：集成测试
+  - TestGoldenDatasetLoader（3 tests）：数据集加载
+
+### Verification Results
+- 评估系统: 35/35 passed
+- 全量 L1+L2: 581/581 passed
+- 零回归
+
+### Current Status
+- E1-E4 评估系统全部完成
+- 项目阶段：评估 harness 可用
+
+### Next Steps
+- E5: Judge 校准（人工标注 30 条 → 对比 Judge 结果 → 一致率 > 85%）
+- E6: 长运行模式增强（随机场景 + 持续模拟）
+
+## 2026-03-19 | Session 19: 生产级 Agent 测试方案 (E5-E8)
+
+### Completed
+- **方案设计** ✓
+  - `specs/agent-testing-v2/plan.md`：完整测试方案（人设矩阵、场景格式、评估体系、实施计划）
+  - `ROADMAP.md` 新增 v6 生产级测试板块（E5-E8）
+  - `feature_list.json` 新增 E5/E6/E7/E8 四个任务条目
+
+- **E5: Investigation 场景定义** ✓
+  - `tests/scenarios/scenarios_v2.yaml`：5个调查场景（goal+persona+guidelines格式），4个人设（小王/李姐/陈/王总）
+  - `tests/scenarios/ground_truth_db.py`：受控 SQLite（inventory/orders/returns/daily_sales），断言验证通过
+  - `tests/scenarios/conftest.py` 改造：`_create_business_db` 改用 `build_ground_truth_db()`
+  - `tests/scenarios/test_investigation.py`：5场景×2人设=10个 pytest case，支持 langwatch-scenario 框架或 fallback turn loop
+
+- **E6: Session Scorer（5维度）** ✓
+  - `tests/scenarios/session_scorer.py`：SessionScorer + SessionScore + DimensionResult
+  - 5维度：goal_achieved / data_accuracy / actionable / no_hallucination / conversation_quality
+  - Judge prompt：传入完整对话 + ground_truth，返回结构化 JSON，temperature=0
+  - LangWatch push：`push_score_to_langwatch()` 推送每个维度分数
+
+- **E7: Soak Test 框架** ✓
+  - `tests/scenarios/soak_runner.py`：run_soak() + SoakResult + save_soak_report()
+  - pass_rate < 85% 触发 alert
+  - `tests/scenarios/test_soak.py`：3个 soak case（S01×小王, S01×李姐, S02×李姐）
+
+- **E8: 时序一致性测试** ✓
+  - `tests/scenarios/temporal_coherence_test.py`：TemporalProbe + ProbeInjector + CoherenceScore
+  - DEFAULT_PROBES：第3轮问 SKU-001 库存，第26轮重问；第9轮问退货率，第27轮重问
+  - 一致性评估：yesno/sku_list/number/verbatim 4种 extractor
+  - `tests/scenarios/test_temporal.py`：一致性阈值 90%
+
+### Verification
+- 561 L1+L2 通过，零回归
+- 5 L3 工具注册测试通过
+- ground_truth_db.py self-test 通过（断货SKU正确、退货率23%正确、7天订单5条正确）
+- 所有新文件语法检查通过
+
+### Current Status
+- E5/E6/E7/E8 代码骨架全部完成
+- 待执行：LLM API 下跑 test_investigation.py 获得第一批真实评分
+
+### Next Steps
+- 跑 `uv run pytest tests/scenarios/test_investigation.py -v -m e2e` 获得初始 baseline
+- 查看 LangWatch trace 分析失败维度
+- 根据 trace 优化 prompt/工具 description

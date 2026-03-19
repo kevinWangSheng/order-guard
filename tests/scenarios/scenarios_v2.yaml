@@ -1,0 +1,254 @@
+# Investigation 场景定义 v2
+#
+# 格式说明：
+#   business_context     → 注入 UserSimulatorAgent 的背景，让 AI 知道为什么要问
+#   conversation_guidelines → 控制 AI 用户的追问路径（不是预设消息）
+#   ground_truth         → 受控数据库里的正确答案，用于 SessionScorer 验证
+#   session_criteria     → 5维度通过标准（全部 True 才算 PASS）
+
+defaults:
+  max_turns: 20
+
+# ─── 人设定义 ───────────────────────────────────────────────────────────────
+
+personas:
+  xiao_wang:
+    name: 小王
+    role: 电商运营实习生
+    description: 刚入职3个月的运营实习生，不懂 SQL，不知道系统里有哪些表，喜欢用口语。
+    traits: |
+      说话口语化，经常用"啊""呢""嗯"。
+      不知道具体的字段名或表名，只会描述业务需求。
+      看到数字会追问"这个多吗？""正常吗？"
+      不会主动追问技术细节，但会追问结论和建议。
+      如果 agent 回答太专业听不懂，会说"能说简单点吗？"
+    adversarial: none
+
+  li_jie:
+    name: 李姐
+    role: 电商运营主管（5年经验）
+    description: 带了5年的电商运营，熟悉业务流程，知道 inventory/orders/returns 等核心表，对数字敏感。
+    traits: |
+      说话直接，不废话，喜欢看表格和数字。
+      知道"库存天数""安全库存""退货率"等业务概念。
+      会追问：数据是哪个仓的？时间范围是多少天？和上周比怎样？
+      如果数字看起来不对，会说"这个数字我感觉不对，再查一下？"
+      目标导向，如果找到问题会要求配置告警或立刻处理。
+    adversarial: medium
+
+  chen_analyst:
+    name: 陈
+    role: 数据分析师
+    description: 数据分析师，精通 SQL，了解数据库表结构，追求数据精确性。
+    traits: |
+      用精确的业务/技术语言表达需求，会说出具体时间范围、过滤条件。
+      收到数据后会追问：用的是哪个时间字段？有没有过滤取消订单？
+      会要求 agent 展示或说明使用的查询逻辑。
+      对结论持怀疑态度，会用自己的认知检验 agent 的答案。
+      如果 agent 回避 SQL 细节，会继续追问不放弃。
+    adversarial: high
+
+  wang_zong:
+    name: 王总
+    role: 电商部门总监
+    description: 部门总监，不关心数据细节，只要结论和行动建议，说话极度简洁。
+    traits: |
+      一句话说完需求："最近有什么问题？""生意怎样？"
+      不喜欢长篇大论，看到超过5行的回复会说"简短点"。
+      中途会切换话题，不会等 agent 说完上一个话题。
+      只要行动建议，不要分析过程。
+      偶尔会追问"这说明什么问题？"或"该怎么办？"
+    adversarial: low
+
+# ─── 场景定义 ────────────────────────────────────────────────────────────────
+
+scenarios:
+
+  - id: S01
+    title: 库存缺货风险调查
+    personas: [xiao_wang, li_jie]
+    max_turns: 20
+    tags: [inventory, multi-turn, data-accuracy]
+
+    business_context: |
+      你发现最近几个热卖品的销量突然上涨，担心库存可能跟不上。
+      你想弄清楚：哪些商品有缺货风险？严重程度如何？还能撑多久？
+      有没有已经安排补货的计划？
+
+    conversation_guidelines:
+      - 用一个宽泛的方式开始，不要直接说"缺货"这个词
+      - 收到 agent 返回的数据后，追问最危险/库存最少的那个 SKU
+      - 要求 agent 根据销量估算"还能撑多少天"
+      - 追问有没有补货计划或在途库存
+      - "li_jie" 人设额外指令：第6轮左右追问"你查的是哪个仓的数据？"
+      - "xiao_wang" 人设额外指令：如果 agent 提到"库存天数"，追问"库存天数是什么意思？"
+
+    ground_truth:
+      datasource: test-warehouse
+      stockout_skus:
+        - sku: SKU-001
+          name: 无线蓝牙耳机
+          quantity: 0
+          safety_stock: 50
+          status: 已缺货
+        - sku: SKU-003
+          name: USB-C 数据线
+          quantity: 5
+          safety_stock: 20
+          status: 低于安全库存
+        - sku: SKU-005
+          name: 便携充电宝
+          quantity: 3
+          safety_stock: 25
+          status: 低于安全库存
+      normal_skus: [SKU-002, SKU-004]  # 这些不应该被列为缺货
+      critical_sku: SKU-001             # 最严重的，Agent 必须重点提及
+
+    session_criteria:
+      goal_achieved: "用户在对话结束时清楚知道了哪些 SKU 有缺货风险（至少识别出 SKU-001）及其严重程度"
+      data_accuracy: "Agent 提到的 SKU 编号和库存数量与 ground_truth 一致，没有将 SKU-002 或 SKU-004 列为缺货"
+      actionable: "Agent 提供了至少一条具体可操作建议（如：立即补货、设置库存告警、临时调拨）"
+      no_hallucination: "Agent 没有编造 ground_truth 以外的 SKU 或不存在的库存数字"
+      conversation_quality: "对话连贯，Agent 正确处理了所有追问，没有答非所问或重复废话"
+
+
+  - id: S02
+    title: 退货率异常诊断
+    personas: [li_jie, chen_analyst]
+    max_turns: 18
+    tags: [returns, diagnosis, cross-table]
+
+    business_context: |
+      你刚收到一条告警，提示 SKU-004（笔记本电脑支架）的退货率异常偏高。
+      你需要搞清楚：退货率到底有多高？是最近才开始的还是一直这样？
+      退货主要集中在哪里（地区/渠道）？可能的原因是什么？
+      是否需要立刻采取行动？
+
+    conversation_guidelines:
+      - 从告警出发，问 agent 退货率具体是多少
+      - 追问这个退货率是最近开始的还是历史趋势
+      - 询问退货集中在哪个地区或渠道
+      - 追问 agent 对可能原因的判断
+      - "chen_analyst" 额外：追问退货率的计算方式（分母是什么：订单数还是件数）
+      - "li_jie" 额外：如果退货率确认异常，追问"我们应该怎么办"
+
+    ground_truth:
+      datasource: test-warehouse
+      target_sku: SKU-004
+      return_rate: 0.23      # 23%，通过 returns/orders 计算
+      return_count: 23       # 退货件数
+      order_count: 100       # 对应订单件数
+      normal_return_rate: 0.05  # 其他 SKU 平均退货率 ~5%
+      anomaly: true
+
+    session_criteria:
+      goal_achieved: "用户在对话结束时了解了 SKU-004 退货率约为 23%，显著高于正常水平"
+      data_accuracy: "Agent 提到的退货率数字与 ground_truth 接近（允许 ±3%），计算逻辑合理"
+      actionable: "Agent 给出了针对高退货率的建议（下架检查/联系供应商/加强质检等）"
+      no_hallucination: "Agent 没有编造不存在的地区分布数据或无法查到的原因"
+      conversation_quality: "Agent 正确理解了'退货率'这个业务术语，对分析师的追问给出了技术性回应"
+
+
+  - id: S03
+    title: 月度经营复盘（含话题切换）
+    personas: [wang_zong]
+    max_turns: 15
+    tags: [overview, topic-switch, summary]
+
+    business_context: |
+      月底了，你需要快速了解这个月的整体经营情况，给董事会准备简报材料。
+      你时间有限，只需要最重要的数字和需要关注的问题。
+      中途你会切换话题，因为你同时在处理多件事。
+
+    conversation_guidelines:
+      - 第一问极度简洁："这个月怎么样？"或"最近经营情况给我汇报一下"
+      - 收到摘要后，追问表现最差的那个指标
+      - 在第5-7轮突然切换话题："算了先不说这个，库存方面有没有问题？"
+      - 在第10-12轮要求：" 帮我出个总结，我要发给董事会"
+      - 如果 agent 的回复超过6行，说"简短点，重点是什么"
+
+    ground_truth:
+      datasource: test-warehouse
+      this_month_revenue: 125000   # 本月总收入（近似值，允许±10%）
+      top_sku: SKU-002             # 销量最好的商品
+      problem_areas:
+        - type: stockout
+          skus: [SKU-001]
+        - type: high_returns
+          skus: [SKU-004]
+
+    session_criteria:
+      goal_achieved: "用户在对话结束时得到了月度经营摘要，包含至少2个关键指标"
+      data_accuracy: "Agent 提到的数字量级合理（不是凭空编造的数量级错误）"
+      actionable: "Agent 对管理层的问题给出了结论性建议，而不是列举大量数据"
+      no_hallucination: "Agent 没有在没有查询数据的情况下编造具体数字"
+      conversation_quality: "Agent 正确处理了话题切换，切换后没有继续谈上一个话题；对简短要求作出了调整"
+
+
+  - id: S04
+    title: 数据分析师深度追问（SQL 透明度）
+    personas: [chen_analyst]
+    max_turns: 20
+    tags: [analyst, sql-transparency, adversarial]
+
+    business_context: |
+      你是数据分析师，正在验证 Agent 的数据准确性。
+      你要检验它的查询逻辑是否严谨，时间字段的选择是否正确，有没有遗漏重要的过滤条件。
+      你不接受模糊答案，会一直追问直到得到技术细节。
+
+    conversation_guidelines:
+      - 从一个具体需求开始：查最近7天的订单，按 SKU 分组统计数量和金额
+      - 收到答案后追问：你用的是哪个时间字段？created_at 还是其他？
+      - 再追问：有没有过滤掉取消的订单？
+      - 换一个需求：同样的查询但看上个月的数据，和这7天对比
+      - 追问：这两个数字哪个更能代表真实销售情况？为什么？
+      - 最后：如果时间字段选错了，数字会差多少？
+
+    ground_truth:
+      datasource: test-warehouse
+      orders_last_7d:
+        total_orders: 5
+        total_amount: 1008.2
+        time_field: created_at      # Agent 应该使用的字段
+      status_distribution:
+        pending: 4
+        shipped: 1
+
+    session_criteria:
+      goal_achieved: "分析师得到了订单数量和金额数据，以及对时间字段选择的明确回答"
+      data_accuracy: "Agent 提供的订单数量与 ground_truth 一致（5条，金额约1008）"
+      actionable: "Agent 清楚说明了使用的时间字段和过滤条件，逻辑自洽"
+      no_hallucination: "Agent 没有在没有实际查询的情况下给出数字；没有声称查询了不存在的字段"
+      conversation_quality: "Agent 对技术追问给出了技术性回应，没有回避 SQL 细节；对比查询逻辑一致"
+
+
+  - id: S05
+    title: 规则配置全流程（含确认机制）
+    personas: [li_jie]
+    max_turns: 15
+    tags: [rule-config, write-interception, confirmation]
+
+    business_context: |
+      你想配置一个新的库存监控规则，但不确定阈值应该设多少合理。
+      你希望 agent 帮你先看看历史数据，再一起决定参数，然后创建规则。
+      过程中你会改变主意，调整一些参数。
+
+    conversation_guidelines:
+      - 开始：说想配一个库存预警规则，但不知道阈值怎么设
+      - 当 agent 提出参数建议后，追问"依据是什么？"
+      - 接受建议后，要求创建规则
+      - 在 agent 准备创建前（或确认时），说"等一下，执行时间改成每天早上8点"
+      - 确认创建后，追问"规则已经生效了吗？怎么验证它在运行？"
+
+    ground_truth:
+      datasource: test-warehouse
+      suggested_threshold: 20     # 推荐的安全库存阈值（结合历史销量）
+      rule_should_be_created: true
+      cron_expression: "0 8 * * *"  # 每天早8点
+
+    session_criteria:
+      goal_achieved: "对话结束时规则已被创建（或 pending 确认），包含用户指定的8点执行时间"
+      data_accuracy: "Agent 在建议阈值前查询了库存/销量数据，建议有数据依据"
+      actionable: "Agent 在执行写操作前请求了用户确认，用户改变主意后使用了新参数"
+      no_hallucination: "Agent 没有说规则已创建但实际没有执行写操作；创建时 cron 参数正确"
+      conversation_quality: "Agent 正确处理了用户改变主意的情况；创建后给出了验证方法"

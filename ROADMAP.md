@@ -151,7 +151,26 @@ v4 现有 12 工具 → v5 新增 7 工具 = 共 19 工具
   preview_report    — 报告预览
 ```
 
-## v6: 外部知识源集成（待定）
+## v6: 生产级 Agent 测试（E5-E8）
+
+> 目标：测试 Agent 长时间运行的正确性和稳定性，通过 LangWatch trace 驱动持续优化。
+> 详细方案见 `specs/agent-testing-v2/plan.md`
+
+### Investigation 场景层（E5-E6）
+- [ ] **E5: Investigation 场景定义** — 5个业务调查场景（goal+persona+guidelines格式），4个真实人设，受控 ground_truth 数据库，替换旧的预设消息方案
+- [ ] **E6: Session Scorer** — 5维度 LLM-as-Judge（goal_achieved / data_accuracy / actionable / no_hallucination / conversation_quality），会话级评分，推送 LangWatch
+
+### 长时间稳定性层（E7-E8）
+- [ ] **E7: Soak Test 框架** — 同场景跑 N 次，统计 pass_rate / token / latency / 失败维度分布，pass_rate < 85% 告警
+- [ ] **E8: 时序一致性测试** — 30轮对话 + 时序探针，检测 Agent 在长对话中是否自相矛盾
+
+### 任务依赖关系
+```
+E5(场景定义) → E6(Session Scorer) → E7(Soak Test)
+                                  → E8(时序一致性)
+```
+
+## v7: 外部知识源集成（待定）
 - [ ] MCP 连接飞书文档 — 自动同步运营维护的飞书表格/文档中的业务上下文
 - [ ] MCP 连接 Google Sheet — 自动读取运营维护的促销日历、备货计划等表格
 - [ ] 业务上下文自动同步 — 定时从外部文档源拉取，与本地 business_context 合并

@@ -133,56 +133,14 @@ class FakeMCPConnection:
 
 
 def _create_business_db() -> sqlite3.Connection:
-    """Create an in-memory SQLite with business data tables and seed rows."""
-    db = sqlite3.connect(":memory:")
+    """Create an in-memory SQLite with business data — uses ground_truth_db for v2 scenarios.
 
-    # inventory table
-    db.execute("""
-        CREATE TABLE inventory (
-            sku TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            safety_stock INTEGER NOT NULL DEFAULT 10,
-            warehouse TEXT DEFAULT '主仓',
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    db.executemany(
-        "INSERT INTO inventory (sku, name, quantity, safety_stock, warehouse) VALUES (?, ?, ?, ?, ?)",
-        [
-            ("SKU-001", "无线蓝牙耳机", 0, 50, "主仓"),       # 缺货！
-            ("SKU-002", "手机保护壳", 200, 30, "主仓"),        # 正常
-            ("SKU-003", "USB-C 数据线", 5, 20, "主仓"),        # 低于安全库存
-            ("SKU-004", "笔记本电脑支架", 100, 15, "华东仓"),  # 正常
-            ("SKU-005", "便携充电宝", 3, 25, "华南仓"),        # 低于安全库存
-        ],
-    )
-
-    # orders table
-    db.execute("""
-        CREATE TABLE orders (
-            id TEXT PRIMARY KEY,
-            sku TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (sku) REFERENCES inventory(sku)
-        )
-    """)
-    db.executemany(
-        "INSERT INTO orders (id, sku, quantity, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        [
-            ("ORD-001", "SKU-001", 10, 299.0, "pending", "2026-03-14 10:00:00"),
-            ("ORD-002", "SKU-001", 5, 149.5, "pending", "2026-03-14 11:00:00"),
-            ("ORD-003", "SKU-002", 3, 59.7, "shipped", "2026-03-13 09:00:00"),
-            ("ORD-004", "SKU-003", 20, 180.0, "pending", "2026-03-14 14:00:00"),
-            ("ORD-005", "SKU-005", 8, 320.0, "pending", "2026-03-14 15:00:00"),
-        ],
-    )
-
-    db.commit()
-    return db
+    For backward-compat with existing L3 E2E tests (test_chat_query_e2e, etc.)
+    that use the older, simpler seed. Investigation scenarios (test_investigation.py)
+    use ground_truth_db.build_ground_truth_db() directly instead.
+    """
+    from tests.scenarios.ground_truth_db import build_ground_truth_db
+    return build_ground_truth_db()
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +250,7 @@ def assemble_all_tools():
     If a tool module is not imported here, scenario tests will fail.
     """
     from order_guard.tools import (
+        query_tool,
         data_tools,
         rule_tools,
         context_tools,
@@ -302,7 +261,8 @@ def assemble_all_tools():
     )
 
     all_tools = (
-        data_tools.TOOL_DEFINITIONS
+        query_tool.TOOL_DEFINITIONS
+        + data_tools.TOOL_DEFINITIONS
         + rule_tools.TOOL_DEFINITIONS
         + context_tools.TOOL_DEFINITIONS
         + alert_tools.TOOL_DEFINITIONS
@@ -312,6 +272,7 @@ def assemble_all_tools():
     )
 
     all_executors = {}
+    all_executors.update(query_tool.TOOL_EXECUTORS)
     all_executors.update(data_tools.TOOL_EXECUTORS)
     all_executors.update(rule_tools.TOOL_EXECUTORS)
     all_executors.update(context_tools.TOOL_EXECUTORS)
@@ -328,6 +289,8 @@ def assemble_all_tools():
 # ---------------------------------------------------------------------------
 
 EXPECTED_TOOLS = {
+    # query_tool (1)
+    "query_data",
     # data_tools (3)
     "list_datasources",
     "get_schema",
