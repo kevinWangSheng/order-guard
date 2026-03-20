@@ -147,76 +147,46 @@ def _rule_based_score(
     agent_text = "\n".join(
         m.get("content", "") or "" for m in conversation if m.get("role") == "assistant"
     ).lower()
-    all_text = "\n".join(m.get("content", "") or "" for m in conversation).lower()
     gt = scenario.get("ground_truth", {})
     turns = sum(1 for m in conversation if m.get("role") == "user")
 
-    # Pre-compute data_tools_called (used in goal_achieved too)
+    # Pre-compute: did agent call any data tools?
     data_tools_called = any(t in tools_used for t in ["query", "get_schema", "list_datasources", "query_data"])
+    has_numbers = bool(re.search(r"\d+", agent_text))
 
-    # ── goal_achieved: did the agent surface stockout/critical items? ────────
-    # Check SKU IDs AND product names AND stockout-related keywords
-    critical_sku = str(gt.get("critical_sku", gt.get("target_sku", ""))).lower()
-    # First check: SKU ID mentioned (with or without dash)
-    goal_ok = bool(critical_sku and critical_sku.replace("-", "") in agent_text.replace("-", ""))
-    # Second check: stockout product names mentioned
-    if not goal_ok and gt.get("stockout_skus"):
-        for s in gt["stockout_skus"]:
-            sku_id = str(s.get("sku", "")).lower()
-            name = str(s.get("name", "")).lower()
-            if (sku_id and sku_id.replace("-", "") in agent_text.replace("-", "")) or \
-               (name and len(name) > 2 and name in agent_text):
-                goal_ok = True
-                break
-    # Third check: agent confirmed querying data AND mentioned stockout-related terms
-    if not goal_ok:
-        stockout_keywords = ["缺货", "0件", "库存为0", "没有库存", "stockout", "out of stock"]
-        if data_tools_called and any(kw in agent_text for kw in stockout_keywords):
-            goal_ok = True
+    # ── goal_achieved: did the agent provide substantive information? ──────
+    # Agent must have queried data AND provided a response with numbers/content
+    goal_ok = data_tools_called and has_numbers and len(agent_text) > 100
     score.goal_achieved = DimensionResult(
         passed=goal_ok,
-        reason=f"[rule] critical SKU '{critical_sku}' {'found' if goal_ok else 'NOT found'} in agent response",
+        reason=(
+            f"[rule] data_queried={data_tools_called}, has_numbers={has_numbers}, "
+            f"response_len={len(agent_text)}"
+        ),
     )
 
-    # ── data_accuracy: does agent mention valid data without obvious errors? ─
-    # Check at least one data tool was called (agent actually queried data)
-    # Check no obviously wrong numbers (hard to verify without LLM, so be lenient)
+    # ── data_accuracy: agent actually queried before giving numbers ────────
     score.data_accuracy = DimensionResult(
         passed=data_tools_called,
         reason=f"[rule] data tools called: {data_tools_called} ({tools_used})",
     )
 
     # ── actionable: did agent give recommendations? ────────────────────────
-    action_keywords = ["建议", "补货", "告警", "处理", "联系", "下架", "检查", "配置", "设置", "立刻", "马上"]
+    action_keywords = ["建议", "补货", "告警", "处理", "联系", "下架", "检查", "配置", "设置", "立刻", "马上",
+                       "关注", "优化", "改善", "跟进", "排查", "注意", "需要"]
     actionable_ok = any(kw in agent_text for kw in action_keywords)
     score.actionable = DimensionResult(
         passed=actionable_ok,
         reason=f"[rule] action keywords {'found' if actionable_ok else 'NOT found'} in agent response",
     )
 
-    # ── no_hallucination: agent didn't invent non-existent SKUs ───────────
-    # Collect valid SKUs from ground_truth
-    valid_skus: set[str] = set()
-    for key in ["stockout_skus", "normal_skus"]:
-        items = gt.get(key, [])
-        if isinstance(items, list):
-            for item in items:
-                if isinstance(item, dict):
-                    valid_skus.add(str(item.get("sku", "")).lower())
-                else:
-                    valid_skus.add(str(item).lower())
-    for key in ["critical_sku", "target_sku", "top_sku"]:
-        if gt.get(key):
-            valid_skus.add(str(gt[key]).lower())
-    # Find SKU-NNN patterns in agent responses
-    mentioned_skus = set(re.findall(r"sku-\d+", agent_text))
-    invented_skus = mentioned_skus - valid_skus if valid_skus else set()
-    hallucination_ok = len(invented_skus) == 0
+    # ── no_hallucination: agent used tools before giving specific numbers ──
+    hallucination_ok = not (has_numbers and not data_tools_called)
     score.no_hallucination = DimensionResult(
         passed=hallucination_ok,
         reason=(
-            f"[rule] invented SKUs: {invented_skus}" if not hallucination_ok
-            else f"[rule] all mentioned SKUs valid ({mentioned_skus})"
+            "[rule] agent gave numbers without querying data" if not hallucination_ok
+            else "[rule] numbers backed by data tool calls"
         ),
     )
 

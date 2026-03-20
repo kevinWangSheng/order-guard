@@ -61,45 +61,41 @@ _TEST_IDS = [f"{s['id']}_{p}" for s, p in _TEST_CASES]
 async def investigation_infra():
     """Initialize real MCP + DAL for investigation tests (module-scoped, shared).
 
-    Reuses pilot_bot._ensure_agent_infra() which handles stdio MCP correctly.
-    Falls back to ground_truth_db if no MCP servers are configured.
+    Uses real MCP servers from config.yaml (mysql-prod, pg-analytics, etc.)
+    so the agent works with actual Kaggle data instead of the toy test-warehouse.
     """
-    from tests.scenarios.ground_truth_db import build_ground_truth_db
-    from tests.scenarios.conftest import FakeMCPConnection
-    from order_guard.data_access.layer import DataAccessLayer
-    from order_guard.data_access.sql_adapter import SQLAdapter
+    from order_guard.config import get_settings
+    from order_guard.mcp import MCPManager
     from order_guard.mcp.models import MCPServerConfig
-    from order_guard.mcp.manager import MCPManager
+    from order_guard.data_access.layer import DataAccessLayer
     from order_guard.tools import data_tools, rule_tools, health_tools, report_tools
     from order_guard.storage.database import init_db
 
     await init_db()
 
-    # Wire ground_truth_db as the data source
-    gt_db = build_ground_truth_db()
-    fake_conn = FakeMCPConnection(gt_db)
-    config = MCPServerConfig(
-        name="test-warehouse",
-        type="dbhub",
-        transport="stdio",
-        command="fake",
-        enabled=True,
-    )
-    mgr = MCPManager()
-    dal = DataAccessLayer(mcp_manager=mgr, configs=[config])
-    adapter = SQLAdapter(fake_conn, config)
-    adapter._is_sqlite = True
-    dal._adapters["test-warehouse"] = adapter
+    settings = get_settings()
+    mcp_configs = [
+        MCPServerConfig(**c.model_dump())
+        for c in settings.mcp_servers
+        if c.enabled
+    ]
 
-    # Configure tools
+    mgr = MCPManager(mcp_configs)
+    if mcp_configs:
+        await mgr.connect_all()
+
+    dal = DataAccessLayer(mcp_manager=mgr, configs=mcp_configs)
+    await dal.initialize()
+
+    # Configure tools (same pattern as production)
     data_tools.configure(data_access_layer=dal)
     rule_tools.configure(data_access_layer=dal, mcp_manager=mgr)
     health_tools.configure(mcp_manager=mgr)
     report_tools.configure(data_access_layer=dal, mcp_manager=mgr)
 
-    yield {"dal": dal, "mcp_manager": mgr, "gt_db": gt_db}
+    yield {"dal": dal, "mcp_manager": mgr}
 
-    gt_db.close()
+    await mgr.disconnect_all()
 
 
 def _build_agent(infra: dict):
