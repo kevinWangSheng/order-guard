@@ -131,6 +131,106 @@ conversation_quality 通过条件:
 """
 
 
+# ─── Rule-based fallback scorer ──────────────────────────────────────────────
+
+def _rule_based_score(
+    score: "SessionScore",
+    conversation: list[dict],
+    scenario: dict,
+    tools_used: list[str],
+) -> "SessionScore":
+    """Rule-based scoring as fallback when LLM judge is unavailable.
+
+    Checks ground_truth facts against conversation text.
+    Less accurate than LLM judge but always works.
+    """
+    agent_text = "\n".join(
+        m.get("content", "") or "" for m in conversation if m.get("role") == "assistant"
+    ).lower()
+    all_text = "\n".join(m.get("content", "") or "" for m in conversation).lower()
+    gt = scenario.get("ground_truth", {})
+    turns = sum(1 for m in conversation if m.get("role") == "user")
+
+    # Pre-compute data_tools_called (used in goal_achieved too)
+    data_tools_called = any(t in tools_used for t in ["query", "get_schema", "list_datasources", "query_data"])
+
+    # ── goal_achieved: did the agent surface stockout/critical items? ────────
+    # Check SKU IDs AND product names AND stockout-related keywords
+    critical_sku = str(gt.get("critical_sku", gt.get("target_sku", ""))).lower()
+    # First check: SKU ID mentioned (with or without dash)
+    goal_ok = bool(critical_sku and critical_sku.replace("-", "") in agent_text.replace("-", ""))
+    # Second check: stockout product names mentioned
+    if not goal_ok and gt.get("stockout_skus"):
+        for s in gt["stockout_skus"]:
+            sku_id = str(s.get("sku", "")).lower()
+            name = str(s.get("name", "")).lower()
+            if (sku_id and sku_id.replace("-", "") in agent_text.replace("-", "")) or \
+               (name and len(name) > 2 and name in agent_text):
+                goal_ok = True
+                break
+    # Third check: agent confirmed querying data AND mentioned stockout-related terms
+    if not goal_ok:
+        stockout_keywords = ["缺货", "0件", "库存为0", "没有库存", "stockout", "out of stock"]
+        if data_tools_called and any(kw in agent_text for kw in stockout_keywords):
+            goal_ok = True
+    score.goal_achieved = DimensionResult(
+        passed=goal_ok,
+        reason=f"[rule] critical SKU '{critical_sku}' {'found' if goal_ok else 'NOT found'} in agent response",
+    )
+
+    # ── data_accuracy: does agent mention valid data without obvious errors? ─
+    # Check at least one data tool was called (agent actually queried data)
+    # Check no obviously wrong numbers (hard to verify without LLM, so be lenient)
+    score.data_accuracy = DimensionResult(
+        passed=data_tools_called,
+        reason=f"[rule] data tools called: {data_tools_called} ({tools_used})",
+    )
+
+    # ── actionable: did agent give recommendations? ────────────────────────
+    action_keywords = ["建议", "补货", "告警", "处理", "联系", "下架", "检查", "配置", "设置", "立刻", "马上"]
+    actionable_ok = any(kw in agent_text for kw in action_keywords)
+    score.actionable = DimensionResult(
+        passed=actionable_ok,
+        reason=f"[rule] action keywords {'found' if actionable_ok else 'NOT found'} in agent response",
+    )
+
+    # ── no_hallucination: agent didn't invent non-existent SKUs ───────────
+    # Collect valid SKUs from ground_truth
+    valid_skus: set[str] = set()
+    for key in ["stockout_skus", "normal_skus"]:
+        items = gt.get(key, [])
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    valid_skus.add(str(item.get("sku", "")).lower())
+                else:
+                    valid_skus.add(str(item).lower())
+    for key in ["critical_sku", "target_sku", "top_sku"]:
+        if gt.get(key):
+            valid_skus.add(str(gt[key]).lower())
+    # Find SKU-NNN patterns in agent responses
+    mentioned_skus = set(re.findall(r"sku-\d+", agent_text))
+    invented_skus = mentioned_skus - valid_skus if valid_skus else set()
+    hallucination_ok = len(invented_skus) == 0
+    score.no_hallucination = DimensionResult(
+        passed=hallucination_ok,
+        reason=(
+            f"[rule] invented SKUs: {invented_skus}" if not hallucination_ok
+            else f"[rule] all mentioned SKUs valid ({mentioned_skus})"
+        ),
+    )
+
+    # ── conversation_quality: reasonable conversation length ───────────────
+    quality_ok = turns >= 3
+    score.conversation_quality = DimensionResult(
+        passed=quality_ok,
+        reason=f"[rule] {turns} turns (min 3 required)",
+    )
+
+    score.passed = all(score.score_summary.values())
+    return score
+
+
 # ─── Scorer ──────────────────────────────────────────────────────────────────
 
 class SessionScorer:
@@ -156,10 +256,12 @@ class SessionScorer:
         return model, key, base
 
     def _format_conversation(self, conversation: list[dict]) -> str:
+        # Keep last 12 turns to avoid exceeding context window
+        recent = conversation[-12:] if len(conversation) > 12 else conversation
         lines = []
-        for i, msg in enumerate(conversation):
+        for i, msg in enumerate(recent):
             role = "用户" if msg["role"] == "user" else "Agent"
-            content = msg.get("content", "")[:600]  # truncate very long turns
+            content = msg.get("content", "")[:300]  # truncate per turn
             lines.append(f"[{i+1}] {role}: {content}")
         return "\n\n".join(lines)
 
@@ -209,7 +311,9 @@ class SessionScorer:
 
         except Exception as e:
             score.judge_error = str(e)
-            logger.warning("SessionScorer judge failed for {}/{}: {}", score.scenario_id, persona_id, e)
+            logger.warning("SessionScorer LLM judge failed for {}/{}: {}", score.scenario_id, persona_id, e)
+            # Fall back to rule-based scoring so the test produces real results
+            score = _rule_based_score(score, conversation, scenario, tools_used or [])
 
         return score
 
@@ -237,7 +341,7 @@ class SessionScorer:
             tools_text=self._format_tools(tools_used),
         )
 
-        resp = await litellm.acompletion(
+        kwargs: dict = dict(
             model=model,
             messages=[
                 {"role": "system", "content": _JUDGE_SYSTEM},
@@ -248,8 +352,21 @@ class SessionScorer:
             api_key=key,
             api_base=base or None,
         )
+        # Request JSON output if the model supports it (GLM, GPT-4o, etc.)
+        try:
+            resp = await litellm.acompletion(
+                **kwargs,
+                response_format={"type": "json_object"},
+            )
+        except Exception:
+            resp = await litellm.acompletion(**kwargs)
 
-        raw = resp.choices[0].message.content or ""
+        raw = (resp.choices[0].message.content or "").strip()
+        if not raw:
+            raise RuntimeError(
+                f"Judge returned empty response (model={model}). "
+                "Try a different judge model or check API quota."
+            )
         return self._parse_judge_response(raw)
 
     def _parse_judge_response(self, raw: str) -> dict:

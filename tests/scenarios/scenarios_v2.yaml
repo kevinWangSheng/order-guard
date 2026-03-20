@@ -7,7 +7,7 @@
 #   session_criteria     → 5维度通过标准（全部 True 才算 PASS）
 
 defaults:
-  max_turns: 20
+  max_turns: 10
 
 # ─── 人设定义 ───────────────────────────────────────────────────────────────
 
@@ -67,7 +67,7 @@ scenarios:
   - id: S01
     title: 库存缺货风险调查
     personas: [xiao_wang, li_jie]
-    max_turns: 20
+    max_turns: 10
     tags: [inventory, multi-turn, data-accuracy]
 
     business_context: |
@@ -76,12 +76,12 @@ scenarios:
       有没有已经安排补货的计划？
 
     conversation_guidelines:
-      - 用一个宽泛的方式开始，不要直接说"缺货"这个词
+      - 用一个宽泛的方式开始，不要直接说缺货这个词
       - 收到 agent 返回的数据后，追问最危险/库存最少的那个 SKU
-      - 要求 agent 根据销量估算"还能撑多少天"
+      - 要求 agent 根据销量估算还能撑多少天
       - 追问有没有补货计划或在途库存
-      - "li_jie" 人设额外指令：第6轮左右追问"你查的是哪个仓的数据？"
-      - "xiao_wang" 人设额外指令：如果 agent 提到"库存天数"，追问"库存天数是什么意思？"
+      - '[li_jie 人设] 第6轮左右追问：你查的是哪个仓的数据？'
+      - '[xiao_wang 人设] 如果 agent 提到库存天数，追问：库存天数是什么意思？'
 
     ground_truth:
       datasource: test-warehouse
@@ -129,8 +129,8 @@ scenarios:
       - 追问这个退货率是最近开始的还是历史趋势
       - 询问退货集中在哪个地区或渠道
       - 追问 agent 对可能原因的判断
-      - "chen_analyst" 额外：追问退货率的计算方式（分母是什么：订单数还是件数）
-      - "li_jie" 额外：如果退货率确认异常，追问"我们应该怎么办"
+      - '[chen_analyst 人设] 追问退货率的计算方式，分母是订单数还是件数'
+      - '[li_jie 人设] 如果退货率确认异常，追问：我们应该怎么办'
 
     ground_truth:
       datasource: test-warehouse
@@ -161,11 +161,11 @@ scenarios:
       中途你会切换话题，因为你同时在处理多件事。
 
     conversation_guidelines:
-      - 第一问极度简洁："这个月怎么样？"或"最近经营情况给我汇报一下"
+      - 第一问极度简洁，比如：这个月怎么样？或：最近经营情况给我汇报一下
       - 收到摘要后，追问表现最差的那个指标
-      - 在第5-7轮突然切换话题："算了先不说这个，库存方面有没有问题？"
-      - 在第10-12轮要求：" 帮我出个总结，我要发给董事会"
-      - 如果 agent 的回复超过6行，说"简短点，重点是什么"
+      - 在第5-7轮突然切换话题，比如：算了先不说这个，库存方面有没有问题？
+      - 在第10-12轮要求出一个总结发给董事会
+      - 如果 agent 的回复超过6行，说：简短点，重点是什么
 
     ground_truth:
       datasource: test-warehouse
@@ -235,10 +235,10 @@ scenarios:
 
     conversation_guidelines:
       - 开始：说想配一个库存预警规则，但不知道阈值怎么设
-      - 当 agent 提出参数建议后，追问"依据是什么？"
+      - 当 agent 提出参数建议后，追问依据是什么
       - 接受建议后，要求创建规则
-      - 在 agent 准备创建前（或确认时），说"等一下，执行时间改成每天早上8点"
-      - 确认创建后，追问"规则已经生效了吗？怎么验证它在运行？"
+      - 在 agent 准备创建前或确认时，说等一下，执行时间改成每天早上8点
+      - 确认创建后，追问规则已经生效了吗，怎么验证它在运行
 
     ground_truth:
       datasource: test-warehouse

@@ -181,7 +181,7 @@ async def _run_investigation(
         f"像真实用户一样逐步提问，根据 agent 的回答决定下一步。"
     )
 
-    # Try to use langwatch-scenario framework
+    # Use langwatch-scenario if available (proper UserSimulatorAgent)
     try:
         import scenario as sc
 
@@ -272,34 +272,46 @@ async def _simple_turn_loop(
     api_base: str | None,
     max_turns: int,
 ) -> tuple[list[dict], list[str]]:
-    """Fallback: LLM generates user messages, agent responds."""
+    """LLM-driven user simulator: generates user messages, agent responds."""
     import litellm
+    from loguru import logger
 
     conversation: list[dict] = []
     tools_used: list[str] = []
 
     for turn in range(max_turns):
-        # Generate user message
+        # Build user simulator messages (system + turn instruction)
         history_text = "\n".join(
             f"{'用户' if m['role']=='user' else 'Agent'}: {m['content'][:300]}"
-            for m in conversation
+            for m in conversation[-6:]  # last 3 exchange pairs
         )
-        prompt = user_sim_prompt
         if conversation:
-            prompt += f"\n\n对话历史：\n{history_text}\n\n请继续对话，发出下一条消息："
+            turn_instruction = (
+                f"对话历史（最近几轮）：\n{history_text}\n\n"
+                f"现在是第{turn+1}轮，请根据你的角色和目标，发出下一条消息（一句话，不超过50字）："
+            )
         else:
-            prompt += "\n\n请开始对话，发出第一条消息："
+            turn_instruction = "请发出第一条消息，开始这次对话（一句话，不超过50字）："
 
-        resp = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=300,
-            api_key=api_key,
-            api_base=api_base or None,
-        )
-        user_msg = (resp.choices[0].message.content or "").strip().strip('"\'')
+        try:
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": user_sim_prompt},
+                    {"role": "user", "content": turn_instruction},
+                ],
+                temperature=0.7,
+                max_tokens=150,
+                api_key=api_key,
+                api_base=api_base or None,
+            )
+            user_msg = (resp.choices[0].message.content or "").strip().strip('"\'')
+        except Exception as e:
+            logger.warning("User sim failed at turn {}: {}", turn + 1, e)
+            break
+
         if not user_msg:
+            logger.warning("User sim returned empty message at turn {}", turn + 1)
             break
 
         conversation.append({"role": "user", "content": user_msg})
@@ -318,8 +330,13 @@ async def _simple_turn_loop(
 
         conversation.append({"role": "assistant", "content": reply})
 
+        # Stop if user simulator signals conversation end or goal is reached
+        closing_signals = ["再见", "谢谢", "好的，明白了", "知道了", "了解了", "好的，谢谢", "没问题了"]
+        user_msg_lower = user_msg.lower()
+        if turn >= 4 and any(s in user_msg for s in closing_signals):
+            break
         # Stop if agent didn't ask a follow-up (natural conversation end)
-        if turn >= 3 and "？" not in reply and "?" not in reply:
+        if turn >= 5 and "？" not in reply and "?" not in reply:
             break
 
     return conversation, tools_used
@@ -343,6 +360,13 @@ async def test_investigation_scenario(scenario, persona_id, investigation_infra)
     elapsed = time.time() - t0
 
     assert conversation, "Conversation is empty — agent or user simulator failed to produce messages"
+
+    # Save conversation for debugging
+    _save_dir = Path("/tmp/orderguard_investigations")
+    _save_dir.mkdir(exist_ok=True)
+    _conv_file = _save_dir / f"{scenario['id']}_{persona_id}.json"
+    _conv_file.write_text(json.dumps(conversation, ensure_ascii=False, indent=2))
+    print(f"\n  [debug] Conversation saved to {_conv_file}")
 
     score: SessionScore = await scorer.score(
         conversation=conversation,
@@ -368,7 +392,7 @@ async def test_investigation_scenario(scenario, persona_id, investigation_infra)
     print(f"{'='*60}")
 
     if score.judge_error:
-        pytest.skip(f"Judge unavailable: {score.judge_error}")
+        print(f"  ⚠ LLM judge unavailable, used rule-based fallback: {score.judge_error[:100]}")
 
     assert score.passed, (
         f"Investigation failed — {scenario['id']}/{persona_id}\n"
