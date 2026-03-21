@@ -384,7 +384,7 @@ async def _handle_user_query_impl(
             logger.info("File context injected: {} ({} rows)", file_context.file_name, file_context.row_count)
 
         # 3. Call unified Agent (no intent classification)
-        reply, _ = await _run_unified_agent(app_state, bot_config, user_id, augmented_text, context_messages)
+        reply, _ = await _run_unified_agent(app_state, bot_config, user_id, augmented_text, context_messages, chat_id, message_id)
 
         await _reply_text(bot_config, chat_id, reply, message_id)
 
@@ -397,7 +397,8 @@ async def _handle_user_query_impl(
                 asyncio.create_task(_session_mgr.generate_title(session.id))
 
     except Exception as e:
-        logger.error("Failed to handle user query: {}", e)
+        import traceback
+        logger.error("Failed to handle user query: {}\n{}", e, traceback.format_exc())
         try:
             await _reply_text(bot_config, chat_id, f"处理出错: {str(e)[:100]}", message_id)
         except Exception:
@@ -417,12 +418,75 @@ async def _handle_user_query_impl(
 # Unified Agent call
 # ---------------------------------------------------------------------------
 
+# Tools whose results are worth sending as intermediate messages
+_PROGRESSIVE_TOOLS = {
+    "manage_rule", "test_rule",
+    "handle_alert", "check_health",
+}
+
+
+def _format_tool_progress(tool_name: str, args: dict[str, Any], result_str: str) -> str | None:
+    """Format a tool result into a short progress message. Returns None to skip."""
+    if tool_name not in _PROGRESSIVE_TOOLS:
+        return None
+
+    try:
+        data = json.loads(result_str) if isinstance(result_str, str) else result_str
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if tool_name == "test_rule":
+        rule_id = args.get("rule_id", "")
+        if isinstance(data, dict) and "data" in data:
+            d = data["data"]
+            rule_name = d.get("rule_name", rule_id)
+            alert_count = d.get("alerts_found", 0)
+            if alert_count > 0:
+                return f"🔔 {rule_name} — {alert_count} 条告警"
+            return f"✅ {rule_name} — 无异常"
+        if isinstance(data, dict) and "error" in data:
+            return f"❌ {rule_id} — {data['error'][:80]}"
+
+    elif tool_name == "manage_rule":
+        action = args.get("action", "")
+        if isinstance(data, dict) and "data" in data:
+            d = data["data"]
+            if action == "create":
+                if isinstance(d, dict) and "created_count" in d:
+                    return f"✅ 批量创建完成：成功 {d['created_count']} 条" + (
+                        f"，失败 {d['failed_count']} 条" if d.get("failed_count") else ""
+                    )
+                if isinstance(d, dict) and "name" in d:
+                    return f"✅ 规则已创建：{d['name']}"
+            elif action == "delete":
+                if isinstance(d, dict) and "deleted_count" in d:
+                    return f"🗑️ 已删除 {d['deleted_count']} 条规则"
+                if isinstance(d, dict) and "name" in d:
+                    return f"🗑️ 已删除规则：{d['name']}"
+        if isinstance(data, dict) and "error" in data:
+            return f"❌ 规则操作失败：{data['error'][:80]}"
+
+    elif tool_name == "check_health":
+        if isinstance(data, dict) and "data" in data:
+            d = data["data"]
+            if isinstance(d, list):
+                healthy = sum(1 for x in d if x.get("status") == "healthy")
+                return f"🏥 健康检查：{healthy}/{len(d)} 数据源正常"
+            if isinstance(d, dict) and "status" in d:
+                name = d.get("datasource_id", "")
+                return f"{'✅' if d['status'] == 'healthy' else '❌'} {name}: {d['status']}"
+
+    return None
+
+
 async def _run_unified_agent(
     app_state: Any,
     bot_config: Any,
     user_id: str,
     text: str,
     context_messages: list[dict],
+    chat_id: str = "",
+    message_id: str = "",
 ) -> tuple[str, None]:
     """Call unified Agent with all tools. Returns (reply, None)."""
     from order_guard.engine.agent import Agent, AgentConfig
@@ -430,7 +494,7 @@ async def _run_unified_agent(
     from order_guard.engine.prompts import build_unified_prompt
     from order_guard.tools import (
         rule_tools, context_tools, alert_tools, data_tools,
-        health_tools, report_tools, usage_tools,
+        health_tools, report_tools, usage_tools, query_tool,
     )
 
     dal = getattr(app_state, "data_access_layer", None)
@@ -444,6 +508,7 @@ async def _run_unified_agent(
         mcp_manager=mcp_manager,
     )
     data_tools.configure(data_access_layer=dal)
+    query_tool.configure(data_access_layer=dal)
     health_tools.configure(mcp_manager=mcp_manager)
     report_tools.configure(
         scheduler=scheduler,
@@ -453,7 +518,8 @@ async def _run_unified_agent(
 
     # Collect all tools
     all_tools = (
-        data_tools.TOOL_DEFINITIONS
+        query_tool.TOOL_DEFINITIONS        # query_data (compound, preferred for data queries)
+        + data_tools.TOOL_DEFINITIONS       # list_datasources, get_schema, query (low-level)
         + rule_tools.TOOL_DEFINITIONS
         + context_tools.TOOL_DEFINITIONS
         + alert_tools.TOOL_DEFINITIONS
@@ -463,6 +529,7 @@ async def _run_unified_agent(
     )
 
     all_executors = {}
+    all_executors.update(query_tool.TOOL_EXECUTORS)
     all_executors.update(data_tools.TOOL_EXECUTORS)
     all_executors.update(rule_tools.TOOL_EXECUTORS)
     all_executors.update(context_tools.TOOL_EXECUTORS)
@@ -479,7 +546,30 @@ async def _run_unified_agent(
     except Exception as e:
         logger.debug("Failed to build context injection: {}", e)
 
-    system_prompt = build_unified_prompt(biz_context)
+    # Step 1: Pre-fetch schema once per call, inject into system prompt
+    schema_context = ""
+    if dal is not None:
+        try:
+            schema_context = await dal.get_or_warm_schema_context()
+            logger.info("Schema pre-fetched for prompt injection: {} chars", len(schema_context))
+        except Exception as e:
+            logger.warning("Failed to pre-fetch schema: {}", e)
+
+    system_prompt = build_unified_prompt(biz_context, schema_context=schema_context)
+
+    # When schema is injected, remove schema exploration tools + raw query tool
+    # — agent has full schema in system prompt; query_data supersedes query
+    if schema_context:
+        _SCHEMA_TOOLS = {"list_datasources", "get_schema", "query"}
+        all_tools = [t for t in all_tools if t.name not in _SCHEMA_TOOLS]
+        for k in _SCHEMA_TOOLS:
+            all_executors.pop(k, None)
+
+    # Progressive output callback — send intermediate messages for key tool results
+    async def _on_tool_result(tool_name: str, args: dict[str, Any], result_str: str) -> None:
+        msg = _format_tool_progress(tool_name, args, result_str)
+        if msg:
+            await _reply_text(bot_config, chat_id, msg)
 
     agent = Agent(
         llm_client=LLMClient(),
@@ -498,6 +588,7 @@ async def _run_unified_agent(
         trigger_type="chat",
         user_id=user_id,
         session_id=chat_id,
+        on_tool_result=_on_tool_result,
     )
 
     return (

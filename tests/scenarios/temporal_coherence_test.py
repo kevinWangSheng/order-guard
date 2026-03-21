@@ -248,7 +248,7 @@ async def run_temporal_coherence_test(
     llm_key = settings.llm.api_key.get_secret_value() if settings.llm.api_key else None
     llm_base = settings.llm.api_base or None
 
-    agent = _build_agent(infra)
+    agent, agent_system_prompt = _build_agent(infra)
     injector = ProbeInjector(probes)
 
     probe_answers: dict[str, dict[str, str]] = {}  # probe_id → {first, second}
@@ -297,6 +297,7 @@ async def run_temporal_coherence_test(
         ctx = conversation[:-1]
         result = await agent.run_unified(
             user_message=user_msg,
+            system_prompt=agent_system_prompt,
             context_messages=ctx,
             trigger_type="chat",
         )

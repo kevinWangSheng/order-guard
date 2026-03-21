@@ -104,6 +104,77 @@ class SQLAdapter(BaseAdapter):
         except Exception:
             return False
 
+    async def get_all_schema_bulk(self) -> dict[str, list[ColumnDetail]]:
+        """Fetch all tables and their columns in a single SQL query (no sample rows).
+
+        Returns {table_name: [ColumnDetail, ...]} for all tables in the current database.
+        Much faster than calling get_schema() per table — used for schema injection.
+        """
+        tools = await self._mcp.list_tools()
+        tool_names = {t.name for t in tools}
+
+        if "execute_sql" not in tool_names:
+            return {}
+
+        # MySQL / MariaDB
+        mysql_sql = (
+            "SELECT table_name, column_name, data_type, COALESCE(column_comment, '') as column_comment "
+            "FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() "
+            "ORDER BY table_name, ordinal_position"
+        )
+        # PostgreSQL
+        pg_sql = (
+            "SELECT table_name, column_name, data_type, '' as column_comment "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'public' "
+            "ORDER BY table_name, ordinal_position"
+        )
+        # SQLite
+        sqlite_tables_sql = (
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+
+        for sql in (mysql_sql, pg_sql):
+            try:
+                result = await self._mcp.call_tool("execute_sql", {"sql": sql})
+                rows = self._extract_rows(result)
+                if not rows:
+                    continue
+                tables: dict[str, list[ColumnDetail]] = {}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    tname = row.get("table_name") or row.get("TABLE_NAME") or ""
+                    col = row.get("column_name") or row.get("COLUMN_NAME") or ""
+                    dtype = row.get("data_type") or row.get("DATA_TYPE") or ""
+                    comment = row.get("column_comment") or row.get("COLUMN_COMMENT") or ""
+                    if tname and col:
+                        tables.setdefault(tname, []).append(
+                            ColumnDetail(name=col, type=dtype, comment=comment)
+                        )
+                if tables:
+                    return tables
+            except Exception:
+                continue
+
+        # SQLite fallback: get table list then PRAGMA per table
+        try:
+            result = await self._mcp.call_tool("execute_sql", {"sql": sqlite_tables_sql})
+            names = self._parse_names_from_sql(result)
+            if names:
+                self._is_sqlite = True
+                tables = {}
+                for tname in names:
+                    cols = await self._get_columns(tname)
+                    if cols:
+                        tables[tname] = cols
+                return tables
+        except Exception:
+            pass
+
+        return {}
+
     # --- Internal helpers ---
 
     async def _get_table_names(self) -> list[str]:
@@ -124,18 +195,24 @@ class SQLAdapter(BaseAdapter):
             except Exception:
                 pass
 
-        # Try SQL discovery — information_schema first, then SQLite fallback
+        # Try SQL discovery — filter by current database to avoid phantom tables
         if "execute_sql" in tool_names:
-            try:
-                result = await self._mcp.call_tool("execute_sql", {
-                    "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'performance_schema', 'mysql', 'sys') ORDER BY table_name",
-                })
-                names = self._parse_names_from_sql(result)
-                if names:
-                    self._tables_cache = names
-                    return names
-            except Exception:
-                pass
+            for sql in (
+                # MySQL: filter by current schema
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name",
+                # PostgreSQL: public schema only
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+                # Old fallback (may return cross-db tables on some configs)
+                "SELECT table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'performance_schema', 'mysql', 'sys') ORDER BY table_name",
+            ):
+                try:
+                    result = await self._mcp.call_tool("execute_sql", {"sql": sql})
+                    names = self._parse_names_from_sql(result)
+                    if names:
+                        self._tables_cache = names
+                        return names
+                except Exception:
+                    continue
 
             try:
                 result = await self._mcp.call_tool("execute_sql", {

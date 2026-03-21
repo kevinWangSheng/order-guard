@@ -16,6 +16,7 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -57,9 +58,9 @@ _TEST_IDS = [f"{s['id']}_{p}" for s, p in _TEST_CASES]
 
 # ─── Infrastructure setup ────────────────────────────────────────────────────
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="function")
 async def investigation_infra():
-    """Initialize real MCP + DAL for investigation tests (module-scoped, shared).
+    """Initialize real MCP + DAL for investigation tests.
 
     Uses real MCP servers from config.yaml (mysql-prod, pg-analytics, etc.)
     so the agent works with actual Kaggle data instead of the toy test-warehouse.
@@ -70,8 +71,17 @@ async def investigation_infra():
     from order_guard.data_access.layer import DataAccessLayer
     from order_guard.tools import data_tools, rule_tools, health_tools, report_tools
     from order_guard.storage.database import init_db
+    from order_guard.engine.agent import langwatch_init
 
     await init_db()
+
+    # Enable LangWatch tracing so token usage appears on dashboard
+    try:
+        import langwatch
+        langwatch.login()
+        langwatch_init()
+    except Exception:
+        pass  # LangWatch optional
 
     settings = get_settings()
     mcp_configs = [
@@ -93,13 +103,25 @@ async def investigation_infra():
     health_tools.configure(mcp_manager=mgr)
     report_tools.configure(data_access_layer=dal, mcp_manager=mgr)
 
-    yield {"dal": dal, "mcp_manager": mgr}
+    # Pre-warm schema cache once — all tests in module share it
+    schema_context = ""
+    try:
+        schema_context = await dal.get_or_warm_schema_context()
+        print(f"\n  [infra] Schema pre-fetched: {len(schema_context)} chars")
+    except Exception as e:
+        print(f"\n  [infra] Schema pre-fetch failed (will fall back to tools): {e}")
+
+    yield {"dal": dal, "mcp_manager": mgr, "schema_context": schema_context}
 
     await mgr.disconnect_all()
 
 
-def _build_agent(infra: dict):
-    """Build a fully-wired Agent using the investigation infra."""
+def _build_agent(infra: dict) -> tuple[Any, str]:
+    """Build a fully-wired Agent using the investigation infra.
+
+    Returns (agent, system_prompt) — system_prompt has schema pre-injected
+    so the agent skips list_datasources/get_schema tool calls entirely.
+    """
     from order_guard.engine.agent import Agent, AgentConfig
     from order_guard.engine.llm_client import LLMClient
     from order_guard.engine.prompts import build_unified_prompt
@@ -107,6 +129,8 @@ def _build_agent(infra: dict):
         data_tools, rule_tools, context_tools, alert_tools,
         health_tools, report_tools, usage_tools,
     )
+
+    schema_context = infra.get("schema_context", "")
 
     all_tools = (
         data_tools.TOOL_DEFINITIONS
@@ -122,13 +146,26 @@ def _build_agent(infra: dict):
                 health_tools, report_tools, usage_tools]:
         all_executors.update(mod.TOOL_EXECUTORS)
 
-    return Agent(
+    # When schema is pre-injected, remove discovery tools — saves 2-3 tool calls per turn
+    if schema_context:
+        _SCHEMA_TOOLS = {"list_datasources", "get_schema"}
+        all_tools = [t for t in all_tools if t.name not in _SCHEMA_TOOLS]
+        for k in _SCHEMA_TOOLS:
+            all_executors.pop(k, None)
+
+    system_prompt = build_unified_prompt(schema_context=schema_context)
+
+    agent = Agent(
         llm_client=LLMClient(),
         data_access_layer=infra["dal"],
-        config=AgentConfig(inject_business_context=False),
+        config=AgentConfig(
+            inject_business_context=False,
+            max_iterations=5,  # Schema injected → 2-3 iterations enough
+        ),
         tools=all_tools,
         tool_executors=all_executors,
     )
+    return agent, system_prompt
 
 
 # ─── Scenario runner ─────────────────────────────────────────────────────────
@@ -154,7 +191,7 @@ async def _run_investigation(
     llm_base = settings.llm.api_base or None
     max_turns = scenario.get("max_turns", 20)
 
-    agent = _build_agent(infra)
+    agent, agent_system_prompt = _build_agent(infra)
 
     # Build persona system prompt for user simulator
     guidelines_text = "\n".join(
@@ -177,71 +214,13 @@ async def _run_investigation(
         f"像真实用户一样逐步提问，根据 agent 的回答决定下一步。"
     )
 
-    # Use langwatch-scenario if available (proper UserSimulatorAgent)
-    try:
-        import scenario as sc
-
-        class InvestigationAgent(sc.AgentAdapter):
-            async def call(self, input: sc.AgentInput) -> sc.AgentReturnTypes:
-                user_msg = ""
-                history = []
-                for msg in input.messages:
-                    if msg["role"] == "user":
-                        user_msg = msg.get("content", "")
-                    history.append(msg)
-                if history:
-                    history = history[:-1]
-
-                result = await agent.run_unified(
-                    user_message=user_msg,
-                    context_messages=history,
-                    trigger_type="chat",
-                )
-                tool_calls = [
-                    {
-                        "id": f"call_{i}",
-                        "type": "function",
-                        "function": {
-                            "name": tc["tool"],
-                            "arguments": json.dumps(tc.get("args", {})),
-                        },
-                    }
-                    for i, tc in enumerate(result.tool_calls_log or [])
-                ]
-                msg: dict = {"role": "assistant", "content": result.response or ""}
-                if tool_calls:
-                    msg["tool_calls"] = tool_calls
-                return msg
-
-        scenario_result = await sc.run(
-            name=f"{scenario['id']}/{persona_id}",
-            description=f"{persona['name']} — {scenario['title']}",
-            agents=[
-                InvestigationAgent(),
-                sc.UserSimulatorAgent(
-                    model=llm_model,
-                    api_key=llm_key,
-                    api_base=llm_base,
-                    system_prompt=user_sim_prompt,
-                ),
-            ],
-            set_id="orderguard-investigation",
-            max_turns=max_turns,
-            verbose=False,
-        )
-
-        conversation = [
-            m if isinstance(m, dict) else m.model_dump()
-            for m in (scenario_result.messages or [])
-        ]
-        tools_used = _extract_tools_from_messages(conversation)
-        return conversation, tools_used
-
-    except ImportError:
-        # Fall back to simple turn loop
-        return await _simple_turn_loop(
-            agent, user_sim_prompt, llm_model, llm_key, llm_base, max_turns
-        )
+    # Use scripted user messages (GLM-5 coding endpoint returns empty for chat)
+    scripted_messages = scenario.get("user_script", [
+        "帮我看看最近的数据情况",
+        "有没有什么异常？",
+        "跟之前比怎么样？",
+    ])
+    return await _scripted_turn_loop(agent, agent_system_prompt, scripted_messages)
 
 
 def _extract_tools_from_messages(messages: list[dict]) -> list[str]:
@@ -260,98 +239,78 @@ def _extract_tools_from_messages(messages: list[dict]) -> list[str]:
     return tools
 
 
-async def _simple_turn_loop(
-    agent,
-    user_sim_prompt: str,
-    model: str,
-    api_key: str,
-    api_base: str | None,
-    max_turns: int,
-) -> tuple[list[dict], list[str]]:
-    """LLM-driven user simulator: generates user messages, agent responds."""
-    import litellm
-    from loguru import logger
+_TURN_TIMEOUT = 180  # seconds per agent call
 
+
+async def _scripted_turn_loop(
+    agent,
+    agent_system_prompt: str,
+    user_messages: list[str],
+) -> tuple[list[dict], list[str]]:
+    """Run agent with scripted user messages. Per-turn timeout + progress logging."""
     conversation: list[dict] = []
     tools_used: list[str] = []
 
-    for turn in range(max_turns):
-        # Build user simulator messages (system + turn instruction)
-        history_text = "\n".join(
-            f"{'用户' if m['role']=='user' else 'Agent'}: {m['content'][:300]}"
-            for m in conversation[-6:]  # last 3 exchange pairs
-        )
-        if conversation:
-            turn_instruction = (
-                f"对话历史（最近几轮）：\n{history_text}\n\n"
-                f"现在是第{turn+1}轮，请根据你的角色和目标，发出下一条消息（一句话，不超过50字）："
-            )
-        else:
-            turn_instruction = "请发出第一条消息，开始这次对话（一句话，不超过50字）："
-
-        try:
-            resp = await litellm.acompletion(
-                model=model,
-                messages=[
-                    {"role": "system", "content": user_sim_prompt},
-                    {"role": "user", "content": turn_instruction},
-                ],
-                temperature=0.7,
-                max_tokens=150,
-                api_key=api_key,
-                api_base=api_base or None,
-            )
-            user_msg = (resp.choices[0].message.content or "").strip().strip('"\'')
-        except Exception as e:
-            logger.warning("User sim failed at turn {}: {}", turn + 1, e)
-            break
-
-        if not user_msg:
-            logger.warning("User sim returned empty message at turn {}", turn + 1)
-            break
-
+    for turn, user_msg in enumerate(user_messages):
+        t_turn = time.time()
         conversation.append({"role": "user", "content": user_msg})
 
-        # Call agent
-        ctx = [m for m in conversation[:-1]]
-        result = await agent.run_unified(
-            user_message=user_msg,
-            context_messages=ctx,
-            trigger_type="chat",
-        )
-        reply = result.response or ""
-        for tc in (result.tool_calls_log or []):
-            if tc["tool"] not in tools_used:
-                tools_used.append(tc["tool"])
+        try:
+            ctx = conversation[:-1]
+            result = await asyncio.wait_for(
+                agent.run_unified(
+                    user_message=user_msg,
+                    system_prompt=agent_system_prompt,
+                    context_messages=ctx,
+                    trigger_type="chat",
+                ),
+                timeout=_TURN_TIMEOUT,
+            )
+            reply = result.response or ""
+            turn_tools = [tc["tool"] for tc in (result.tool_calls_log or [])]
+            for t in turn_tools:
+                if t not in tools_used:
+                    tools_used.append(t)
+        except asyncio.TimeoutError:
+            print(f"  [turn {turn+1}] TIMEOUT ({_TURN_TIMEOUT}s)", flush=True)
+            break
+        except Exception as e:
+            print(f"  [turn {turn+1}] ERROR: {e}", flush=True)
+            break
 
         conversation.append({"role": "assistant", "content": reply})
 
-        # Stop if user simulator signals conversation end or goal is reached
-        closing_signals = ["再见", "谢谢", "好的，明白了", "知道了", "了解了", "好的，谢谢", "没问题了"]
-        user_msg_lower = user_msg.lower()
-        if turn >= 4 and any(s in user_msg for s in closing_signals):
-            break
-        # Stop if agent didn't ask a follow-up (natural conversation end)
-        if turn >= 5 and "？" not in reply and "?" not in reply:
-            break
+        elapsed_turn = time.time() - t_turn
+        print(
+            f"  [turn {turn+1}/{len(user_messages)}] {elapsed_turn:.1f}s | "
+            f"user: {user_msg[:40]} | agent: {reply[:60]}... | tools: {turn_tools}",
+            flush=True,
+        )
 
     return conversation, tools_used
 
 
 # ─── Test cases ──────────────────────────────────────────────────────────────
 
+@pytest.mark.timeout(300)  # 5 min hard limit per test case
 @pytest.mark.parametrize("scenario,persona_id", _TEST_CASES, ids=_TEST_IDS)
 async def test_investigation_scenario(scenario, persona_id, investigation_infra):
     """Run one investigation scenario with one persona and assert all 5 dimensions pass."""
     persona = _PERSONAS[persona_id]
     scorer = SessionScorer()
 
+    # Rebuild agent fresh per test to avoid event loop issues with module-scoped MCP
+    agent, agent_system_prompt = _build_agent(investigation_infra)
+
+    scripted_messages = scenario.get("user_script", [
+        "帮我看看最近的数据情况",
+        "有没有什么异常？",
+        "跟之前比怎么样？",
+    ])
+
     t0 = time.time()
-    conversation, tools_used = await _run_investigation(
-        scenario=scenario,
-        persona=persona,
-        persona_id=persona_id,
-        infra=investigation_infra,
+    conversation, tools_used = await _scripted_turn_loop(
+        agent, agent_system_prompt, scripted_messages,
     )
     elapsed = time.time() - t0
 

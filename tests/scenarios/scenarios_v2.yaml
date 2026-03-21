@@ -10,7 +10,7 @@
 # 使用 Kaggle 公开数据集：Olist 100K 订单 + 评价 + 物流
 
 defaults:
-  max_turns: 10
+  max_turns: 5
 
 # ─── 人设定义 ───────────────────────────────────────────────────────────────
 
@@ -70,8 +70,13 @@ scenarios:
   - id: S01
     title: 订单整体情况摸底
     personas: [xiao_wang, li_jie]
-    max_turns: 10
+    max_turns: 5
     tags: [orders, overview, multi-turn]
+
+    user_script:
+      - "帮我看看最近的订单情况怎么样？"
+      - "退货率和退款情况怎么样？有没有异常？"
+      - "跟上个月比有什么变化？给我一两条建议"
 
     business_context: |
       你想了解最近的订单整体情况。
@@ -102,7 +107,7 @@ scenarios:
   - id: S02
     title: 评分/退款异常诊断
     personas: [li_jie, chen_analyst]
-    max_turns: 10
+    max_turns: 5
     tags: [reviews, returns, diagnosis, cross-table]
 
     business_context: |
@@ -134,7 +139,7 @@ scenarios:
   - id: S03
     title: 经营概览（含话题切换）
     personas: [wang_zong]
-    max_turns: 10
+    max_turns: 5
     tags: [overview, topic-switch, summary]
 
     business_context: |
@@ -164,7 +169,7 @@ scenarios:
   - id: S04
     title: 数据分析师深度追问（SQL 透明度）
     personas: [chen_analyst]
-    max_turns: 10
+    max_turns: 5
     tags: [analyst, sql-transparency, adversarial]
 
     business_context: |
@@ -195,7 +200,7 @@ scenarios:
   - id: S05
     title: 规则配置全流程（含确认机制）
     personas: [li_jie]
-    max_turns: 10
+    max_turns: 5
     tags: [rule-config, write-interception, confirmation]
 
     business_context: |

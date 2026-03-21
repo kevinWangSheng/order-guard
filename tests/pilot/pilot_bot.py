@@ -47,6 +47,9 @@ class PilotConfig:
     report_every_n: int = 0           # 每 N 个场景出报告，0=每轮结束出
     personas_file: str = ""
     feishu_webhook_url: str = ""      # 报告推送 webhook
+    # LLM Judge 评估 (L2)
+    judge_enabled: bool = True        # 启用 LLM Judge（需要 API Key）
+    judge_model: str = ""             # Judge 模型（留空用默认 gpt-4o）
 
 
 def load_pilot_config(config_path: Path | None = None) -> PilotConfig:
@@ -78,6 +81,8 @@ def load_pilot_config(config_path: Path | None = None) -> PilotConfig:
         report_every_n=strategy.get("report_every_n", 0),
         personas_file=data.get("personas_file", ""),
         feishu_webhook_url=data.get("feishu_webhook_url", ""),
+        judge_enabled=data.get("eval", {}).get("judge_enabled", True),
+        judge_model=data.get("eval", {}).get("judge_model", ""),
     )
 
 
@@ -98,6 +103,8 @@ class ConversationRecord:
     failed_criteria: list[str] = field(default_factory=list)
     reasoning: str = ""
     response_times: list[float] = field(default_factory=list)
+    tool_results_log: list[dict] = field(default_factory=list)  # 工具返回的原始数据
+    judge_result: dict | None = None  # LLM Judge 评判结果 (L2)
     error: str = ""
     started_at: str = ""
     finished_at: str = ""
@@ -160,6 +167,16 @@ async def _ensure_agent_infra():
     _agent_infra["mcp_manager"] = mcp_manager
     _agent_infra["dal"] = dal
     _agent_infra["settings"] = settings
+
+    # Pre-warm schema cache for schema injection optimization
+    schema_context = ""
+    try:
+        schema_context = await dal.get_or_warm_schema_context()
+        logger.info("Pilot: schema pre-fetched ({} chars)", len(schema_context))
+    except Exception as e:
+        logger.warning("Pilot: schema pre-fetch failed: {}", e)
+    _agent_infra["schema_context"] = schema_context
+
     _agent_infra["ready"] = True
 
 
@@ -219,7 +236,17 @@ async def _call_agent(user_id: str, text: str, context_messages: list[dict]) -> 
     except Exception:
         pass
 
-    system_prompt = build_unified_prompt(biz_context)
+    # Schema injection (use cached schema from infra)
+    schema_context = _agent_infra.get("schema_context", "")
+
+    system_prompt = build_unified_prompt(biz_context, schema_context=schema_context)
+
+    # Remove discovery tools if schema is injected
+    if schema_context:
+        _SCHEMA_TOOLS = {"list_datasources", "get_schema"}
+        all_tools = [t for t in all_tools if t.name not in _SCHEMA_TOOLS]
+        for k in _SCHEMA_TOOLS:
+            all_executors.pop(k, None)
 
     agent = Agent(
         llm_client=LLMClient(),
@@ -554,8 +581,14 @@ async def run_scenario(
             elapsed = time.time() - t0
             record.response_times.append(elapsed)
 
-            # Extract tools from agent result
+            # Extract tools and tool results from agent result
             turn_tools = [tc["tool"] for tc in _last_agent_tools] if _last_agent_tools else []
+            for tc in _last_agent_tools:
+                record.tool_results_log.append({
+                    "tool": tc.get("tool", ""),
+                    "args": tc.get("args", {}),
+                    "result": tc.get("result", ""),
+                })
 
             conversation.append({"role": "assistant", "content": reply})
             record.messages.append({
@@ -572,7 +605,7 @@ async def run_scenario(
             if "？" not in reply and "?" not in reply and turn >= 1:
                 break
 
-        # 5. Evaluate (rule-based, no LLM needed)
+        # 5. Evaluate: L1 rule-based + optional L2 LLM Judge
         if conversation:
             # Collect tools used from agent results
             tools_used = []
@@ -581,11 +614,24 @@ async def run_scenario(
                     if t not in tools_used:
                         tools_used.append(t)
 
+            # L1: Rule-based evaluation (instant, free)
             ev = evaluate_conversation_rules(conversation, task["criteria"], tools_used)
             record.success = ev["success"]
             record.passed_criteria = ev["passed"]
             record.failed_criteria = ev["failed"]
             record.reasoning = ev["reasoning"]
+
+            # L2: LLM Judge evaluation (optional, requires API key)
+            if config.judge_enabled:
+                record.judge_result = await _run_judge(
+                    record=record,
+                    conversation=conversation,
+                    tools_used=tools_used,
+                    judge_model=config.judge_model or None,
+                )
+
+            # Push L1 + L2 scores to Langfuse
+            _push_langfuse_scores(record)
 
     except Exception as e:
         record.error = str(e)
@@ -595,37 +641,197 @@ async def run_scenario(
     return record
 
 
+async def _run_judge(
+    record: ConversationRecord,
+    conversation: list[dict],
+    tools_used: list[str],
+    judge_model: str | None = None,
+) -> dict | None:
+    """Run LLM-as-Judge (L2) evaluation on the conversation.
+
+    Returns judge result dict or None if judge is unavailable/fails.
+    """
+    try:
+        from order_guard.evals.judge import judge_response, is_judge_available
+
+        if not is_judge_available():
+            logger.debug("Judge API Key 未配置，跳过 L2 评判")
+            return None
+
+        # Collect user input (first user message)
+        user_input = ""
+        for m in conversation:
+            if m["role"] == "user":
+                user_input = m["content"]
+                break
+
+        # Collect agent output (last assistant message)
+        agent_output = ""
+        for m in reversed(conversation):
+            if m["role"] == "assistant":
+                agent_output = m["content"]
+                break
+
+        # Format tool results for judge
+        tool_results_text = ""
+        if record.tool_results_log:
+            parts = []
+            for tr in record.tool_results_log:
+                result_str = str(tr.get("result", ""))[:500]
+                parts.append(f"[{tr.get('tool', '?')}] {result_str}")
+            tool_results_text = "\n".join(parts)
+
+        logger.info("开始 L2 Judge 评判...")
+        result = await judge_response(
+            input=user_input,
+            output=agent_output,
+            tools_used=tools_used,
+            tool_results=tool_results_text,
+            model=judge_model,
+        )
+
+        if result:
+            dims = ["accuracy", "completeness", "actionability", "safety"]
+            scores = {d: result[d]["score"] for d in dims}
+            logger.info("L2 Judge 结果: {} overall={}", scores, result.get("overall_pass"))
+        return result
+
+    except ImportError:
+        logger.debug("order_guard.evals 模块不可用，跳过 L2 评判")
+        return None
+    except Exception as e:
+        logger.warning("L2 Judge 评判异常: {}", e)
+        return None
+
+
+def _push_langfuse_scores(record: ConversationRecord):
+    """Push pilot evaluation scores to Langfuse for dashboard visibility."""
+    try:
+        from langfuse import Langfuse
+        lf = Langfuse()
+
+        trace = lf.trace(
+            name=f"pilot/{record.persona_name}/{record.task_name}",
+            metadata={
+                "role": record.role_name,
+                "persona": record.persona_name,
+                "task": record.task_name,
+                "task_id": record.task_id,
+            },
+            tags=["pilot", record.role_name, record.task_id],
+        )
+
+        # L1: Overall pass/fail (rule-based)
+        trace.score(name="l1_pass", value=1.0 if record.success else 0.0,
+                    comment=record.reasoning or "")
+
+        # L1: Per-criteria scores
+        for c in record.passed_criteria:
+            trace.score(name="l1_criteria", value=1.0, comment=f"PASS: {c}")
+        for c in record.failed_criteria:
+            trace.score(name="l1_criteria", value=0.0, comment=f"FAIL: {c}")
+
+        # L2: LLM Judge scores (if available)
+        if record.judge_result:
+            for dim in ["accuracy", "completeness", "actionability", "safety"]:
+                dim_data = record.judge_result.get(dim, {})
+                trace.score(
+                    name=f"judge_{dim}",
+                    value=float(dim_data.get("score", 0)),
+                    comment=dim_data.get("reasoning", ""),
+                )
+            trace.score(
+                name="judge_overall",
+                value=1.0 if record.judge_result.get("overall_pass") else 0.0,
+            )
+
+        # Latency
+        if record.response_times:
+            avg_time = sum(record.response_times) / len(record.response_times)
+            trace.score(name="avg_latency_s", value=round(avg_time, 1))
+
+        # Conversation content as generation
+        for msg in record.messages:
+            trace.generation(
+                name=msg.get("role", "unknown"),
+                input=msg.get("content", "")[:500] if msg.get("role") == "user" else None,
+                output=msg.get("content", "")[:2000] if msg.get("role") == "assistant" else None,
+                metadata={"tools_used": msg.get("tools_used", [])},
+            )
+
+        lf.flush()
+        logger.debug("Langfuse scores pushed for {}/{}", record.persona_name, record.task_name)
+    except Exception as e:
+        logger.debug("Langfuse score push failed: {}", e)
+
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
 def build_report_card(records: list[ConversationRecord]) -> dict:
-    """Build Feishu card for test results."""
+    """Build Feishu card for test results (L1 + L2)."""
     passed = sum(1 for r in records if r.success)
     total = len(records)
     all_rts = [rt for r in records for rt in r.response_times]
     avg_rt = sum(all_rts) / len(all_rts) if all_rts else 0
 
+    # L2 Judge summary
+    judged = [r for r in records if r.judge_result is not None]
+    judge_pass = sum(1 for r in judged if r.judge_result and r.judge_result.get("overall_pass"))
+    has_judge = len(judged) > 0
+
     header_color = "green" if passed == total else ("orange" if passed > total // 2 else "red")
 
-    lines = ["| 角色 | 人设 | 场景 | 结果 | 响应 |",
-             "|------|------|------|------|------|"]
+    # Summary line
+    summary = f"**L1: {passed}/{total} 通过** | 平均响应 {avg_rt:.1f}s"
+    if has_judge:
+        # Per-dimension averages
+        dim_scores: dict[str, list[int]] = {d: [] for d in ["accuracy", "completeness", "actionability", "safety"]}
+        for r in judged:
+            jr = r.judge_result or {}
+            for d in dim_scores:
+                dim_scores[d].append(jr.get(d, {}).get("score", 0))
+        dim_avgs = {d: sum(s) / len(s) if s else 0 for d, s in dim_scores.items()}
+        summary += f"\n**L2 Judge: {judge_pass}/{len(judged)} 通过**"
+        summary += f" | 准确={dim_avgs['accuracy']:.0%} 完整={dim_avgs['completeness']:.0%} 可操作={dim_avgs['actionability']:.0%} 安全={dim_avgs['safety']:.0%}"
+
+    # Table with optional Judge column
+    if has_judge:
+        lines = ["| 角色 | 场景 | L1 | Judge | 响应 |",
+                 "|------|------|-----|-------|------|"]
+    else:
+        lines = ["| 角色 | 场景 | 结果 | 响应 |",
+                 "|------|------|------|------|"]
+
     for r in records:
-        status = "✅" if r.success else "❌"
+        l1_status = "✅" if r.success else "❌"
         avg = sum(r.response_times) / len(r.response_times) if r.response_times else 0
-        lines.append(f"| {r.role_name} | {r.persona_name} | {r.task_name} | {status} | {avg:.1f}s |")
+        if has_judge:
+            if r.judge_result:
+                j_status = "✅" if r.judge_result.get("overall_pass") else "❌"
+            else:
+                j_status = "—"
+            lines.append(f"| {r.role_name} | {r.task_name} | {l1_status} | {j_status} | {avg:.1f}s |")
+        else:
+            lines.append(f"| {r.role_name} | {r.task_name} | {l1_status} | {avg:.1f}s |")
 
     failed_parts = []
     for r in records:
-        if not r.success:
+        if not r.success or (r.judge_result and not r.judge_result.get("overall_pass")):
             failed_parts.append(f"**{r.persona_name} — {r.task_name}**")
             for c in r.failed_criteria:
-                failed_parts.append(f"  - ❌ {c}")
+                failed_parts.append(f"  - L1 ❌ {c}")
+            if r.judge_result and not r.judge_result.get("overall_pass"):
+                for dim in ["accuracy", "completeness", "actionability", "safety"]:
+                    d = r.judge_result.get(dim, {})
+                    if d.get("score", 0) == 0:
+                        failed_parts.append(f"  - L2 ❌ {dim}: {d.get('reasoning', '')}")
             if r.error:
                 failed_parts.append(f"  - 错误: {r.error[:100]}")
 
     elements = [
-        {"tag": "markdown", "content": f"**{passed}/{total} 通过** | 平均响应 {avg_rt:.1f}s"},
+        {"tag": "markdown", "content": summary},
         {"tag": "hr"},
         {"tag": "markdown", "content": "\n".join(lines)},
     ]
@@ -635,8 +841,12 @@ def build_report_card(records: list[ConversationRecord]) -> dict:
         {"tag": "plain_text", "content": f"TestPilot | {datetime.now().strftime('%Y-%m-%d %H:%M')}"}
     ]}]
 
+    title = f"TestPilot — L1: {passed}/{total}"
+    if has_judge:
+        title += f" | L2: {judge_pass}/{len(judged)}"
+
     return {
-        "header": {"title": {"tag": "plain_text", "content": f"TestPilot — {passed}/{total} 通过"}, "template": header_color},
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": header_color},
         "elements": elements,
     }
 
@@ -672,6 +882,7 @@ def save_report(records: list[ConversationRecord]) -> Path:
                 "passed_criteria": r.passed_criteria,
                 "failed_criteria": r.failed_criteria,
                 "reasoning": r.reasoning,
+                "judge_result": r.judge_result,
                 "response_times": r.response_times,
                 "messages": r.messages,
                 "error": r.error,
@@ -704,6 +915,125 @@ def resolve_llm(config: PilotConfig) -> tuple[str, str, str]:
     if not model or not key:
         raise ValueError("LLM 未配置")
     return model, key, base
+
+
+# ---------------------------------------------------------------------------
+# LangWatch Scenario adapter — uploads each pilot run to Simulations
+# ---------------------------------------------------------------------------
+
+async def _run_scenario_with_langwatch(
+    task: dict, config: PilotConfig,
+    llm_model: str, llm_key: str, llm_base: str,
+) -> ConversationRecord:
+    """Run a scenario via langwatch-scenario framework for Simulations upload.
+
+    Uses the pilot_bot's already-initialized MCP infrastructure.
+    Falls back to plain run_scenario() if scenario import fails.
+    """
+    try:
+        import scenario as sc
+    except ImportError:
+        return await run_scenario(config, task, llm_model, llm_key, llm_base)
+
+    await _ensure_agent_infra()
+
+    user_id = f"pilot_{task['role_id']}_{task['persona_id']}"
+
+    class PilotAgent(sc.AgentAdapter):
+        """Wraps _call_agent() for the scenario framework."""
+        async def call(self, input: sc.AgentInput) -> sc.AgentReturnTypes:
+            user_msg = ""
+            history = []
+            for msg in input.messages:
+                if msg["role"] == "user":
+                    user_msg = msg.get("content", "")
+                history.append(msg)
+            if history:
+                history = history[:-1]
+
+            reply = await _call_agent(user_id, user_msg, history)
+
+            # Attach tool_calls for LangWatch visibility
+            tool_calls = []
+            for i, tc in enumerate(_last_agent_tools):
+                tool_calls.append({
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": tc["tool"],
+                        "arguments": json.dumps(tc.get("args", {})),
+                    },
+                })
+            msg_out: dict = {"role": "assistant", "content": reply}
+            if tool_calls:
+                msg_out["tool_calls"] = tool_calls
+            return msg_out
+
+    record = ConversationRecord(
+        role_name=task["role_name"],
+        persona_name=task["persona_name"],
+        task_name=task["task_name"],
+        task_id=task["task_id"],
+        criteria=task["criteria"],
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    try:
+        t0 = time.time()
+        scenario_result = await sc.run(
+            name=f"{task['persona_name']}/{task['task_name']}",
+            description=(
+                f"{task['persona_name']}（{task['role_name']}）— {task['task_goal']}"
+            ),
+            agents=[
+                PilotAgent(),
+                sc.UserSimulatorAgent(
+                    model=llm_model, api_key=llm_key, api_base=llm_base or None,
+                    system_prompt=(
+                        f"你扮演「{task['persona_name']}」，一位{task['role_name']}。\n"
+                        f"背景：{task['role_description']}\n"
+                        f"性格：{task['persona_traits']}\n"
+                        f"任务：{task['task_name']}\n"
+                        f"目标：{task['task_goal']}\n\n"
+                        f"用中文自然沟通，像真实用户一样逐步提问，不要一次说完。"
+                    ),
+                ),
+                sc.JudgeAgent(
+                    criteria=task["criteria"],
+                    model=llm_model, api_key=llm_key, api_base=llm_base or None,
+                ),
+            ],
+            set_id="orderguard-pilot",
+            max_turns=config.max_turns_per_scenario,
+        )
+
+        elapsed = time.time() - t0
+        record.success = scenario_result.success
+        record.passed_criteria = scenario_result.passed_criteria or []
+        record.failed_criteria = scenario_result.failed_criteria or []
+        record.reasoning = scenario_result.reasoning
+        record.total_time = elapsed
+
+        # Extract tools used
+        tools_used = []
+        for m in (scenario_result.messages or []):
+            msg_dict = m if isinstance(m, dict) else m.model_dump()
+            for tc in msg_dict.get("tool_calls", []):
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = fn.get("name", "") if isinstance(fn, dict) else ""
+                if name and name not in tools_used:
+                    tools_used.append(name)
+        record.messages = [
+            m if isinstance(m, dict) else m.model_dump()
+            for m in (scenario_result.messages or [])
+        ]
+
+    except Exception as e:
+        logger.error("Scenario framework error, falling back: {}", e)
+        return await run_scenario(config, task, llm_model, llm_key, llm_base)
+
+    record.finished_at = datetime.now(timezone.utc).isoformat()
+    return record
 
 
 # ---------------------------------------------------------------------------

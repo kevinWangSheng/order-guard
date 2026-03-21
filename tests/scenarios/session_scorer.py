@@ -212,8 +212,43 @@ class SessionScorer:
         self._api_base = api_base
 
     def _get_llm_config(self) -> tuple[str, str, str]:
-        """Get LLM config from args or fall back to OrderGuard settings."""
+        """Get LLM config: constructor args > JUDGE_* env/.env vars > OrderGuard settings."""
+        import os
+        from pathlib import Path
+
         model, key, base = self._model or "", self._api_key or "", self._api_base or ""
+
+        # Load JUDGE_* from OS env or .env file
+        if not model or not key:
+            env_model = os.environ.get("JUDGE_MODEL", "")
+            env_key = os.environ.get("JUDGE_API_KEY", "")
+            env_base = os.environ.get("JUDGE_API_BASE", "")
+
+            # If not in OS env, try reading .env directly
+            if not env_model or not env_key:
+                for env_path in [Path.cwd() / ".env", Path(__file__).resolve().parents[2] / ".env"]:
+                    if env_path.exists():
+                        for line in env_path.read_text().splitlines():
+                            line = line.strip()
+                            if not line or line.startswith("#") or "=" not in line:
+                                continue
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip()
+                            if k == "JUDGE_MODEL" and not env_model:
+                                env_model = v
+                            elif k == "JUDGE_API_KEY" and not env_key:
+                                env_key = v
+                            elif k == "JUDGE_API_BASE" and not env_base:
+                                env_base = v
+                        break
+
+            if env_model and env_key:
+                model = model or env_model
+                key = key or env_key
+                base = base or env_base
+                return model, key, base
+
+        # Fall back to OrderGuard LLM settings
         if not model or not key:
             try:
                 from order_guard.config import get_settings
@@ -322,16 +357,37 @@ class SessionScorer:
             api_key=key,
             api_base=base or None,
         )
-        # Request JSON output if the model supports it (GLM, GPT-4o, etc.)
+
+        # Try with response_format first, fall back to plain call
         try:
-            resp = await litellm.acompletion(
-                **kwargs,
-                response_format={"type": "json_object"},
-            )
+            resp = await litellm.acompletion(**kwargs, response_format={"type": "json_object"})
         except Exception:
             resp = await litellm.acompletion(**kwargs)
 
         raw = (resp.choices[0].message.content or "").strip()
+
+        # Coding-plan endpoints (e.g. GLM-5) return empty for plain chat
+        # but work when a tools parameter is present. Retry with a dummy tool.
+        if not raw:
+            logger.debug("Judge returned empty, retrying with dummy tool (coding-plan workaround)")
+            _DUMMY_TOOL = [{
+                "type": "function",
+                "function": {
+                    "name": "submit_evaluation",
+                    "description": "提交评估结果",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"result": {"type": "string"}},
+                    },
+                },
+            }]
+            try:
+                resp = await litellm.acompletion(**kwargs, tools=_DUMMY_TOOL)
+            except Exception:
+                pass
+            else:
+                raw = (resp.choices[0].message.content or "").strip()
+
         if not raw:
             raise RuntimeError(
                 f"Judge returned empty response (model={model}). "

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -27,6 +28,70 @@ from order_guard.mcp.schema import (
     filter_schema,
 )
 from order_guard.mcp.validator import validate_query
+
+
+# ---------------------------------------------------------------------------
+# LangWatch integration helpers
+# ---------------------------------------------------------------------------
+
+_langwatch_initialized = False
+
+
+def langwatch_init():
+    """Mark LangWatch as explicitly initialized (called from main.py)."""
+    global _langwatch_initialized
+    _langwatch_initialized = True
+
+
+def _langwatch_available() -> bool:
+    """Check if LangWatch was explicitly initialized via langwatch_init()."""
+    return _langwatch_initialized
+
+
+@contextmanager
+def _lw_trace(name: str, metadata: dict[str, Any]):
+    """Open a LangWatch trace if available, otherwise yield None.
+
+    Uses the v0.16+ API: langwatch.trace() as context manager, then
+    get_current_trace().autotrack_litellm_calls() to wire LiteLLM capture.
+    """
+    if not _langwatch_available():
+        yield None
+        return
+    try:
+        import langwatch
+        import litellm as _litellm_mod
+        with langwatch.trace(name=name, metadata=metadata) as t:
+            # v0.16+: get_current_trace() returns the active trace in context
+            current = langwatch.get_current_trace()
+            if current is not None:
+                current.autotrack_litellm_calls(_litellm_mod)
+            else:
+                t.autotrack_litellm_calls(_litellm_mod)
+            yield t
+    except Exception as e:
+        logger.debug("LangWatch trace error: {}", e)
+        yield None
+
+
+def _lw_tool_span(trace: Any, tool_name: str, args: dict[str, Any]):
+    """Open a LangWatch span for a tool call if trace is active."""
+    if trace is None:
+        return _noop_context()
+    try:
+        import langwatch
+        return langwatch.span(
+            name=tool_name,
+            type="tool",
+            input={"type": "json", "value": args},
+        )
+    except Exception:
+        return _noop_context()
+
+
+@contextmanager
+def _noop_context():
+    yield None
 
 # Keep for backward compatibility
 AGENT_SYSTEM_PROMPT = """你是企业数据分析 Agent。根据分析需求，使用工具查询数据，判断异常并输出结果。
@@ -131,6 +196,8 @@ class Agent:
         self._tool_executors = tool_executors or {}
 
         self._tool_calls_log: list[dict[str, Any]] = []
+        # Step 2: Session-level tool result cache {cache_key → result_str}
+        self._tool_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Unified mode: run with AgentResult (for interactive use)
@@ -145,11 +212,41 @@ class Agent:
         trigger_type: str = "chat",
         user_id: str = "",
         session_id: str = "",
+        on_tool_result: Callable[[str, dict[str, Any], str], Any] | None = None,
     ) -> AgentResult:
         """Run the Agent in unified mode with all tools.
 
+        Args:
+            on_tool_result: Optional async callback(tool_name, args, result_str)
+                called after each tool execution. Used for progressive output.
+
         Returns AgentResult with response text.
         """
+        with _lw_trace("agent.run_unified", metadata={
+            "trigger_type": trigger_type,
+            "user_id": user_id,
+            "session_id": session_id,
+            "rule_id": self._rule_id,
+        }) as lw_trace:
+            return await self._run_unified_impl(
+                user_message, system_prompt, context_messages,
+                trigger_type=trigger_type, user_id=user_id,
+                session_id=session_id, on_tool_result=on_tool_result,
+                lw_trace=lw_trace,
+            )
+
+    async def _run_unified_impl(
+        self,
+        user_message: str,
+        system_prompt: str,
+        context_messages: list[dict[str, Any]] | None,
+        *,
+        trigger_type: str,
+        user_id: str,
+        session_id: str,
+        on_tool_result: Callable[[str, dict[str, Any], str], Any] | None,
+        lw_trace: Any = None,
+    ) -> AgentResult:
         self._tool_calls_log = []
         start_time = time.monotonic()
         tool_calls_total = 0
@@ -165,9 +262,19 @@ class Agent:
         )
 
         # Build messages
+        # Step 1 (Prompt Caching): use content-array format for system message so
+        # Anthropic models can cache it. LiteLLM transparently handles this for
+        # non-Anthropic models by joining the text parts.
         messages: list[dict[str, Any]] = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            messages.append({
+                "role": "system",
+                "content": [{
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+            })
         if context_messages:
             messages.extend(context_messages)
         messages.append({"role": "user", "content": user_message})
@@ -192,14 +299,29 @@ class Agent:
                 messages.append(_build_assistant_msg(response))
 
                 for tc in response.tool_calls:
-                    result = await self._execute_tool_call_unified(
-                        backend, tc, iteration + 1,
-                    )
+                    with _lw_tool_span(lw_trace, tc.name, tc.arguments) as span:
+                        result = await self._execute_tool_call_unified(
+                            backend, tc, iteration + 1,
+                        )
+                        if span is not None:
+                            try:
+                                span.update(output={"type": "json", "value": result[:2000]})
+                            except Exception:
+                                pass
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": result,
                     })
+
+                    # Progressive output callback
+                    if on_tool_result is not None:
+                        try:
+                            ret = on_tool_result(tc.name, tc.arguments, result)
+                            if hasattr(ret, "__await__"):
+                                await ret
+                        except Exception as e:
+                            logger.warning("on_tool_result callback error: {}", e)
 
                 continue
 
@@ -256,6 +378,28 @@ class Agent:
         session_id: str = "",
     ) -> AnalyzerOutput:
         """Execute the Agent loop for rule detection. Returns AnalyzerOutput."""
+        with _lw_trace("agent.run", metadata={
+            "trigger_type": trigger_type or "detection",
+            "rule_id": self._rule_id,
+            "user_id": user_id,
+            "session_id": session_id,
+        }) as lw_trace:
+            return await self._run_detection_impl(
+                rule_prompt, system_prompt,
+                trigger_type=trigger_type, user_id=user_id,
+                session_id=session_id, lw_trace=lw_trace,
+            )
+
+    async def _run_detection_impl(
+        self,
+        rule_prompt: str,
+        system_prompt: str | None,
+        *,
+        trigger_type: str,
+        user_id: str,
+        session_id: str,
+        lw_trace: Any = None,
+    ) -> AnalyzerOutput:
         total_usage = TokenUsage()
         start_time = time.monotonic()
         tool_calls_total = 0
@@ -295,8 +439,16 @@ class Agent:
             logger.info("Agent: time constraint injected (data_window={})", self._data_window)
 
         # Build initial messages
+        # Use content-array format for system message so Anthropic models can cache it.
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": effective_system_prompt},
+            {
+                "role": "system",
+                "content": [{
+                    "type": "text",
+                    "text": effective_system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+            },
             {"role": "user", "content": rule_prompt},
         ]
 
@@ -319,9 +471,15 @@ class Agent:
                 messages.append(_build_assistant_msg(response))
 
                 for tc in response.tool_calls:
-                    result = await self._execute_tool_call(
-                        backend, tc, iteration + 1,
-                    )
+                    with _lw_tool_span(lw_trace, tc.name, tc.arguments) as span:
+                        result = await self._execute_tool_call(
+                            backend, tc, iteration + 1,
+                        )
+                        if span is not None:
+                            try:
+                                span.update(output={"type": "json", "value": result[:2000]})
+                            except Exception:
+                                pass
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -405,20 +563,55 @@ class Agent:
     # Unified mode tool execution
     # ------------------------------------------------------------------
 
+    # Tools whose results can be safely cached within a session
+    _CACHEABLE_TOOLS = frozenset({"list_datasources", "get_schema", "query"})
+    # Tools whose results can be masked (replaced with summary) after first use
+    _MASKABLE_TOOLS = frozenset({"list_datasources", "get_schema"})
+    # Max chars for tool result injected into message history (Step 3)
+    _MAX_RESULT_CHARS = 4000
+
     async def _execute_tool_call_unified(
         self,
         backend: Any,
         tc: Any,
         iteration: int,
     ) -> str:
-        """Execute tool call directly."""
-        self._tool_calls_log.append({
+        """Execute tool call with session caching (Step 2) and result size control."""
+        log_entry = {
             "iteration": iteration,
             "tool": tc.name,
             "args": tc.arguments,
-        })
+        }
+        self._tool_calls_log.append(log_entry)
 
-        return await self._execute_tool_call(backend, tc, iteration)
+        # Step 2: Session-level tool result cache
+        cache_key: str | None = None
+        if tc.name in self._CACHEABLE_TOOLS:
+            cache_key = f"{tc.name}:{json.dumps(tc.arguments, sort_keys=True)}"
+            if cache_key in self._tool_cache:
+                logger.debug("Tool cache hit: {} {}", tc.name, cache_key[:60])
+                cached = self._tool_cache[cache_key]
+                log_entry["result"] = cached[:2000]
+                log_entry["cache_hit"] = True
+                return cached
+
+        result = await self._execute_tool_call(backend, tc, iteration)
+
+        if cache_key is not None:
+            self._tool_cache[cache_key] = result
+
+        # Store truncated result for evaluation (judge needs to verify data accuracy)
+        log_entry["result"] = result[:2000] if result else ""
+
+        # Step 3: Observation Masking — truncate very long results to keep context small
+        if len(result) > self._MAX_RESULT_CHARS:
+            summary = result[: self._MAX_RESULT_CHARS]
+            result = summary + f"\n...[truncated, total {len(result)} chars]"
+            logger.debug(
+                "Tool result truncated: {} → {} chars", tc.name, self._MAX_RESULT_CHARS
+            )
+
+        return result
 
     # ------------------------------------------------------------------
     # Standard tool execution (with SQL audit)

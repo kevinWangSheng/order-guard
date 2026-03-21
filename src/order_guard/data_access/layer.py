@@ -139,6 +139,8 @@ class DataAccessLayer:
         self._mcp_manager = mcp_manager
         self._configs = configs or []
         self._adapters: dict[str, BaseAdapter] = {}
+        # Schema cache: {datasource_id: {table_name: TableDetail}}
+        self._schema_cache: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> None:
         """Initialize adapters for all connected MCP servers."""
@@ -160,6 +162,123 @@ class DataAccessLayer:
                 logger.info("DataAccessLayer: registered adapter '{}' (type={})", name, config.type)
             except Exception as e:
                 logger.warning("DataAccessLayer: failed to init adapter '{}': {}", name, e)
+
+    # ------------------------------------------------------------------
+    # Schema cache
+    # ------------------------------------------------------------------
+
+    async def warm_schema_cache(self) -> None:
+        """Pre-load all table schemas into memory. Called once at startup."""
+        for ds_id, adapter in self._adapters.items():
+            try:
+                # Get table list
+                result = await adapter.get_schema(None)
+                if result.error or not result.tables:
+                    continue
+
+                ds_cache: dict[str, Any] = {}
+                for table_info in result.tables:
+                    try:
+                        detail_result = await adapter.get_schema(table_info.name)
+                        if detail_result.table_detail:
+                            ds_cache[table_info.name] = detail_result.table_detail
+                    except Exception as e:
+                        logger.debug("Schema cache: skip {}.{}: {}", ds_id, table_info.name, e)
+
+                self._schema_cache[ds_id] = ds_cache
+                logger.info(
+                    "Schema cache warmed: {} — {} tables",
+                    ds_id, len(ds_cache),
+                )
+            except Exception as e:
+                logger.warning("Schema cache failed for '{}': {}", ds_id, e)
+
+    def get_schema_context(self, datasource_id: str | None = None) -> str:
+        """Build a compact schema context string from cache.
+
+        If datasource_id is None, returns schema for all datasources.
+        Returns DDL-like text suitable for injecting into an LLM prompt.
+        """
+        parts: list[str] = []
+        sources = (
+            {datasource_id: self._schema_cache.get(datasource_id, {})}
+            if datasource_id
+            else self._schema_cache
+        )
+
+        for ds_id, tables in sources.items():
+            if not tables:
+                continue
+            parts.append(f"## 数据源: {ds_id}")
+            for table_name, detail in tables.items():
+                cols = ", ".join(
+                    f"{c.name} {c.type}" + (f" -- {c.comment}" if c.comment else "")
+                    for c in detail.columns
+                )
+                parts.append(f"  {table_name}({cols})")
+                if detail.foreign_keys:
+                    parts.append(f"    FK: {'; '.join(detail.foreign_keys)}")
+            parts.append("")
+
+        return "\n".join(parts)
+
+    async def get_or_warm_schema_context(self) -> str:
+        """Warm schema cache if empty, then return formatted schema text.
+
+        Uses a fast bulk query (single SQL per datasource, no sample rows).
+        Safe to call multiple times — only fetches once per session.
+        Returns empty string if no adapters are configured.
+        """
+        if not self._adapters:
+            return ""
+        if not self._schema_cache:
+            await self._warm_schema_cache_lite()
+        return self.get_schema_context()
+
+    async def _warm_schema_cache_lite(self) -> None:
+        """Fast schema warm: one bulk SQL query per datasource, no sample rows.
+
+        Populates _schema_cache with {datasource_id: {table_name: TableDetail}}.
+        Skips adapters that don't support the bulk query.
+        """
+        from order_guard.data_access.models import TableDetail
+        from order_guard.data_access.sql_adapter import SQLAdapter
+
+        for ds_id, adapter in self._adapters.items():
+            try:
+                if isinstance(adapter, SQLAdapter):
+                    bulk = await adapter.get_all_schema_bulk()
+                    if bulk:
+                        self._schema_cache[ds_id] = {
+                            tname: TableDetail(name=tname, columns=cols)
+                            for tname, cols in bulk.items()
+                        }
+                        logger.info(
+                            "Schema cache (lite) warmed: {} — {} tables",
+                            ds_id, len(bulk),
+                        )
+                    else:
+                        logger.warning("Schema cache (lite): no tables found for '{}'", ds_id)
+                else:
+                    # Non-SQL adapters: fall back to full warm
+                    result = await adapter.get_schema(None)
+                    if not result.error and result.tables:
+                        ds_cache: dict[str, Any] = {}
+                        for table_info in result.tables:
+                            try:
+                                detail_result = await adapter.get_schema(table_info.name)
+                                if detail_result.table_detail:
+                                    ds_cache[table_info.name] = detail_result.table_detail
+                            except Exception as e:
+                                logger.debug("Schema cache: skip {}.{}: {}", ds_id, table_info.name, e)
+                        self._schema_cache[ds_id] = ds_cache
+                        logger.info("Schema cache warmed: {} — {} tables", ds_id, len(ds_cache))
+            except Exception as e:
+                logger.warning("Schema cache lite failed for '{}': {}", ds_id, e)
+
+    @property
+    def schema_cache(self) -> dict[str, dict[str, Any]]:
+        return self._schema_cache
 
     def get_tools(self) -> list[ToolInfo]:
         """Return the fixed set of 3 data access tools."""
