@@ -145,6 +145,8 @@ class AgentResult:
 
     response: str                               # LLM's final text reply
     tool_calls_log: list[dict[str, Any]] = field(default_factory=list)
+    token_usage: TokenUsage | None = None       # Aggregate token usage for this call
+    iterations: int = 0                         # Number of agent loop iterations
 
 
 class AgentConfig(BaseModel):
@@ -342,6 +344,8 @@ class Agent:
                 return AgentResult(
                     response=response.content,
                     tool_calls_log=self._tool_calls_log,
+                    token_usage=total_usage,
+                    iterations=iterations_total,
                 )
 
             logger.warning("Agent received empty response at iteration {}", iteration + 1)
@@ -362,6 +366,8 @@ class Agent:
         return AgentResult(
             response="抱歉，分析超时。请简化您的问题后重试。",
             tool_calls_log=self._tool_calls_log,
+            token_usage=total_usage,
+            iterations=iterations_total,
         )
 
     # ------------------------------------------------------------------
